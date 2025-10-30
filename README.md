@@ -59,7 +59,7 @@ your-project/
 └── requirements.txt                   # Python dependencies
 ```
 
-**Total:** ~800 lines of battle-tested automation code
+**Total:** ~700 lines of battle-tested automation code
 
 ---
 
