@@ -59,11 +59,14 @@ def main():
     print("\n🎯 PHASE 2: PRIORITY PLANNING")
     print("-" * 60)
 
-    tasks = []
+    focus_area = os.environ.get('FOCUS_AREA', 'all').lower()
+    print(f"📍 Focus Area: {focus_area}")
 
-    # Task 1: Testing
+    all_tasks = []
+
+    # Task 1: Testing (SOFTWARE)
     if findings['missing_tests']:
-        tasks.append({
+        all_tasks.append({
             'priority': 1,
             'title': '💻 [SOFTWARE] Implement Unit Testing Framework',
             'description': 'No test coverage found. Add pytest framework and write tests for hand_tracker.py and led_controller.py modules.',
@@ -73,11 +76,12 @@ def main():
             'risk': 3,
             'assign_to': ['software-agent'],
             'deadline': (datetime.now() + timedelta(days=14)).strftime('%Y-%m-%d'),
-            'labels': ['agent:software', 'priority:high', 'testing']
+            'labels': ['agent:software', 'priority:high', 'testing'],
+            'category': 'software'
         })
 
-    # Task 2: Integration
-    tasks.append({
+    # Task 2: Integration (INTEGRATION)
+    all_tasks.append({
         'priority': 2,
         'title': '🔗 [INTEGRATION] Connect Hand Tracking to UV Control',
         'description': 'Both modules are complete independently. Create main_controller.py to integrate hand tracking, positioning, and UV curing workflow.',
@@ -87,11 +91,12 @@ def main():
         'risk': 5,
         'assign_to': ['integration-agent', 'software-agent', 'safety-agent'],
         'deadline': (datetime.now() + timedelta(days=21)).strftime('%Y-%m-%d'),
-        'labels': ['agent:integration', 'agent:software', 'agent:safety', 'priority:high']
+        'labels': ['agent:integration', 'agent:software', 'agent:safety', 'priority:high'],
+        'category': 'integration'
     })
 
-    # Task 3: Safety
-    tasks.append({
+    # Task 3: Safety (SAFETY)
+    all_tasks.append({
         'priority': 3,
         'title': '🛡️ [SAFETY] Implement Hardware Safety Interlocks',
         'description': 'Add door sensors, emergency stop validation, and hardware safety interlocks for UV control system.',
@@ -101,10 +106,23 @@ def main():
         'risk': 9,
         'assign_to': ['safety-agent', 'hardware-agent'],
         'deadline': (datetime.now() + timedelta(days=7)).strftime('%Y-%m-%d'),
-        'labels': ['agent:safety', 'agent:hardware', 'priority:critical', 'safety-critical']
+        'labels': ['agent:safety', 'agent:hardware', 'priority:critical', 'safety-critical'],
+        'category': 'safety'
     })
 
-    print(f"📋 Generated {len(tasks)} priority tasks")
+    # Filter tasks based on focus area
+    if focus_area == 'all':
+        tasks = all_tasks
+    else:
+        # Filter to only tasks matching the focus area
+        tasks = [t for t in all_tasks if focus_area in t['category'] or focus_area in str(t['labels'])]
+        
+    if not tasks:
+        print(f"⚠️  No tasks found for focus area: {focus_area}")
+        print("Available categories: software, integration, safety, hardware")
+        return
+
+    print(f"📋 Generated {len(tasks)} priority tasks (filtered by: {focus_area})")
     for task in tasks:
         print(f"  {task['priority']}. {task['title']}")
 
@@ -117,7 +135,8 @@ def main():
 
     created_issues = []
 
-    for task in tasks[:3]:  # Create top 3
+    # Create all filtered tasks (respects focus area)
+    for task in tasks:
         try:
             agents_list = '\n'.join(f"- @{agent}" for agent in task['assign_to'])
             
