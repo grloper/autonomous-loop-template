@@ -3,8 +3,8 @@ name: Workflow Doctor - Auto-Fix Failures
 on:
   workflow_run:
     workflows: 
-      - "Multi-Agent Collaboration System"
       - "🎯 Orchestrator - Autonomous Project Lead"
+      - "🤖 Copilot Auto-Assign & Auto-Review"
     types: 
       - completed
   workflow_dispatch:
