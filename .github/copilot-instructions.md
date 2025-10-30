@@ -1,145 +1,284 @@
-# Copilot Instructions - Automated Gel Nail Machine
+﻿# Copilot Instructions - [YOUR_PROJECT_NAME]# Copilot Instructions - [YOUR_PROJECT_NAME]
 
-## Project Overview
-This is an R&D prototype for an automated gel nail application and UV curing system. The system uses computer vision (OpenCV + MediaPipe) for hand tracking and Raspberry Pi GPIO for safe UV LED control. **Safety is paramount** - this involves UV light and chemicals.
 
-## Architecture: Modular Service Layer
+
+## 📋 Project Overview##  Project Overview
+
+[Describe your project in 2-3 sentences. What problem does it solve? Who uses it?][Describe your project in 2-3 sentences. What problem does it solve? Who uses it?]
+
+
+
+**Example:****Example:**
+
+> A web-based task management app that helps teams collaborate efficiently. > A web-based task management app that helps teams collaborate efficiently. 
+
+> Built with React + Node.js, deployed on AWS. Focuses on simplicity and speed.> Built with React + Node.js, deployed on AWS. Focuses on simplicity and speed.
+
+
+
+------
+
+
+
+## 🛠️ Tech Stack##  Tech Stack
+
+
+
+### **Languages & Frameworks**### **Languages & Frameworks**
+
+- **Backend:** [e.g., Python 3.11, Node.js 18, Go 1.21]- **Backend:** [e.g., Python 3.11, Node.js 18, Go 1.21]
+
+- **Frontend:** [e.g., React 18, Next.js 14, Vue 3]- **Frontend:** [e.g., React 18, Next.js 14, Vue 3]
+
+- **Database:** [e.g., PostgreSQL 15, MongoDB 6, Redis]- **Database:** [e.g., PostgreSQL 15, MongoDB 6, Redis]
+
+- **Infrastructure:** [e.g., AWS (Lambda, S3, RDS), Docker, Kubernetes]- **Infrastructure:** [e.g., AWS (Lambda, S3, RDS), Docker, Kubernetes]
+
+
+
+### **Key Libraries**### **Key Libraries**
+
+- [e.g., FastAPI for REST APIs]- [e.g., FastAPI for REST APIs]
+
+- [e.g., Prisma for database ORM]- [e.g., Prisma for database ORM]
+
+- [e.g., TailwindCSS for styling]- [e.g., TailwindCSS for styling]
+
+
+
+------
+
+
+
+## 🎨 Architecture Patterns##  Architecture Patterns
+
+
+
+### **1. [Pattern Name - e.g., Repository Pattern]**### **1. [Pattern Name]**
+
+[Brief description and when to use it][Brief description and when to use it]
+
+
+
+**Example:****Example:**
+
+> All database access goes through repository classes in `src/repositories/`.> **Repository Pattern**: All database access goes through repository classes.
+
+> Never query the database directly from controllers or services.> Never query the database directly from controllers.
+
+
+
+```typescript### **2. [Pattern Name]**
+
+// ✅ CORRECT[Another important pattern in your codebase]
+
+const users = await userRepository.findAll();
+
+**Example:**
+
+// ❌ WRONG> **Dependency Injection**: Use constructor injection for services.
+
+const users = await prisma.user.findMany();> Makes testing easier and reduces coupling.
 
 ```
-Camera (USB) → HandTracker → (Future: MainController) ← UVLEDController → GPIO/PWM → UV LEDs
-                    ↓                                          ↓
-              Fingertip coords                           Safety timers
+
+### **3. [Pattern Name]**
+
+### **2. [Pattern Name - e.g., Error Handling]**[Third pattern]
+
+[Another important pattern in your codebase]
+
+---
+
+**Example:**
+
+> All API errors use custom error classes that extend `AppError`.##  Critical Files (Never Auto-Merge)
+
+> Always include error codes for client handling.
+
+List files/directories that require human review. The auto-reviewer will flag these.
+
+### **3. [Pattern Name - e.g., Testing Strategy]**
+
+[Third pattern]
+
+**Example:**
+> Unit tests for business logic, integration tests for APIs.
+> Minimum 80% coverage required for new code.
+
+---
+
+## 🚫 Critical Files (Never Auto-Merge)
+
+These files require human review before merging. Update this list for your project.
+
+```yaml
+# Authentication & Security
+src/auth/:
+  reason: "Security-critical authentication logic"
+
+src/middleware/auth.ts:
+  reason: "Token validation and session management"
+
+# Payment Processing
+src/services/payment/:
+  reason: "Financial transactions - zero error tolerance"
+
+# Database Migrations
+migrations/:
+  reason: "Database schema changes need DBA review"
+
+# Infrastructure
+.github/workflows/:
+  reason: "CI/CD pipeline changes affect all deployments"
+
+terraform/:
+  reason: "Infrastructure as code - affects production systems"
+
+docker-compose.yml:
+  reason: "Container orchestration configuration"
+
+# Configuration
+.env.production:
+  reason: "Production secrets and config"
 ```
 
-The codebase is intentionally modular with two independent components currently implemented:
-- **`software/hand_tracking/`**: MediaPipe-based computer vision (standalone, ~30 FPS on Pi 4)
-- **`software/uv_control/`**: PWM-controlled UV LED system with safety features (standalone)
-- **Integration layer is NOT yet implemented** - modules run independently
+---
 
-## Critical Patterns & Conventions
+## ✅ Testing Requirements
 
-### 1. Simulation Mode is Default
-All hardware modules **must** support `simulation_mode=True` for dev/testing without Raspberry Pi:
-```python
-controller = UVLEDController(gpio_pin=18, simulation_mode=True)  # No hardware required
+### **Unit Tests**
+- Test all business logic functions
+- Mock external dependencies (APIs, database)
+- Run with: `npm test` or `pytest`
+
+### **Integration Tests**
+- Test API endpoints end-to-end
+- Use test database (not production!)
+- Run with: `npm run test:integration`
+
+### **Coverage Goals**
+- Minimum: 80% for new code
+- Critical paths: 100% (auth, payments, etc.)
+
+---
+
+## 🔒 Safety Rules
+
+**❌ NEVER do these things:**
+- Commit API keys, secrets, or passwords
+- Disable security middleware (auth, CORS, rate limiting)
+- Use `eval()`, `exec()`, or similar dangerous functions
+- Bypass input validation
+- Log sensitive user data (passwords, credit cards, etc.)
+- Deploy to production without tests passing
+
+**✅ ALWAYS do these:**
+- Validate all user input
+- Use parameterized queries (prevent SQL injection)
+- Sanitize HTML output (prevent XSS)
+- Rate limit public APIs
+- Log errors with context (but not secrets!)
+
+---
+
+## 📂 Project Structure
+
 ```
-Use `simulation_mode=False` only on actual Pi hardware. Check `RPi.GPIO` availability with try/except.
-
-### 2. Safety-First Error Handling
-UV control has strict safety enforcement:
-- Max continuous runtime: 5 minutes (`max_continuous_time=300`)
-- Mandatory cooldown after 2+ minutes operation (`COOLDOWN_THRESHOLD_SECONDS=120`)
-- Emergency stop **immediately** sets intensity to 0
-- All UV operations should fail safely (turn off on exception)
-
-Example pattern from `led_controller.py`:
-```python
-try:
-    controller.cure_with_profile('gel_polish')
-except Exception as e:
-    logger.exception(f"Unexpected error: {e}")
-    controller.emergency_stop()  # Always emergency stop on error
-    raise
-```
-
-### 3. Curing Profiles Strategy Pattern
-Add new profiles to `CURING_PROFILES` dict in `UVLEDController` class (lines 30-40):
-```python
-'new_product': CuringProfile('Product Name', duration_seconds=45, intensity_percent=85, pulse_mode=False)
-```
-Never hardcode timing - use profiles for consistency and safety validation.
-
-### 4. MediaPipe Coordinate Translation
-Hand landmarks are normalized (0.0-1.0). Always convert to pixel coords using frame shape:
-```python
-x = int(landmark.x * width)
-y = int(landmark.y * height)
-```
-See `get_fingertip_positions()` in `hand_tracker.py` for reference implementation.
-
-### 5. GPIO Pin Numbering
-Use **BCM numbering** (not BOARD):
-- GPIO 18 (Pin 12): LED PWM control
-- GPIO 23 (Pin 16): Emergency stop
-- GPIO 24/25 (Pins 18/22): Door interlocks
-- GPIO 4 (Pin 7): Temperature sensor
-
-## Development Workflows
-
-### Testing Hand Tracking
-```bash
-python software/hand_tracking/hand_tracker.py  # Runs live demo with webcam
-```
-Press 'q' to quit. Shows fingertip positions and nail zones overlaid on video.
-
-### Testing UV Control (Simulation)
-```bash
-python software/uv_control/led_controller.py  # Interactive menu, no hardware needed
-```
-Tests curing profiles, intensity control, cooldown logic.
-
-### Dependencies
-```bash
-pip install -r requirements.txt  # Installs OpenCV, MediaPipe, NumPy
-```
-`RPi.GPIO` only installs on ARM platforms (auto-detected via platform_machine check).
-
-### No Testing Framework Yet
-Unit tests are planned but **not yet implemented**. Manual testing via `if __name__ == "__main__"` blocks is current practice.
-
-## Key Files & Their Purposes
-
-- **`software/hand_tracking/hand_tracker.py`**: Complete hand tracking implementation. Detect hands, extract 21 landmarks per hand, calculate fingertip positions and nail zones.
-- **`software/uv_control/led_controller.py`**: UV LED control with PWM, safety timers, curing profiles. Supports both hardware and simulation.
-- **`docs/SOFTWARE_ARCHITECTURE.md`**: Comprehensive design doc with class diagrams, data flows, future integration plans.
-- **`docs/SAFETY.md`**: **Read before any UV-related changes.** UV exposure limits, chemical safety, electrical safety.
-- **`docs/HARDWARE_SETUP.md`**: Complete BOM, wiring diagrams, GPIO pinout, assembly instructions.
-
-## Common Tasks
-
-### Adding a New Curing Profile
-1. Add to `CURING_PROFILES` dict in `led_controller.py`
-2. Use existing `CuringProfile` dataclass structure
-3. Validate duration < `max_continuous_time` (300s)
-4. Test with `cure_with_profile('profile_name')`
-
-### Modifying Hand Detection Confidence
-Adjust in `HandTracker.__init__()`:
-```python
-detection_confidence=0.7,  # Lower = more sensitive but false positives
-tracking_confidence=0.5    # Lower = smoother but less accurate
+your-project/
+├── src/
+│   ├── controllers/     # HTTP request handlers
+│   ├── services/        # Business logic
+│   ├── repositories/    # Database access
+│   ├── models/          # Data models / entities
+│   ├── middleware/      # Express/Koa middleware
+│   └── utils/           # Helper functions
+├── tests/
+│   ├── unit/            # Unit tests
+│   └── integration/     # Integration tests
+├── migrations/          # Database migrations
+└── docs/                # Documentation
 ```
 
-### Adding Safety Checks
-All safety logic goes in UV control module. Pattern:
-1. Check safety condition (cooldown, interlock, temp)
-2. If unsafe: log error, call `emergency_stop()`, return False
-3. If safe: proceed with operation
+---
 
-### Future Integration Work
-When building `integration/main_controller.py`:
-- Import both `HandTracker` and `UVLEDController`
-- Coordinate tracking → positioning → curing workflow
-- State machine pattern recommended (see `docs/SOFTWARE_ARCHITECTURE.md` - ApplicationStateMachine)
-- Monitor safety conditions continuously during operation
+## 🚀 Development Workflow
 
-## What NOT To Do
+1. **Branch naming:** `feature/description`, `fix/description`, `chore/description`
+2. **Commits:** Use conventional commits (`feat:`, `fix:`, `docs:`, `refactor:`)
+3. **Pull requests:** 
+   - All changes go through PRs
+   - PRs must pass CI checks
+   - Safe changes auto-merge (docs, tests)
+   - Code changes need approval
+4. **Code review:** Look for logic errors, security issues, performance
 
-❌ **Never bypass safety features** (cooldown, emergency stop, max runtime)  
-❌ **Don't remove simulation mode** - required for development workflow  
-❌ **Don't hardcode timing values** - use `CuringProfile` pattern  
-❌ **Don't assume hardware availability** - always check/handle `ImportError` for `RPi.GPIO`  
-❌ **Don't modify MediaPipe hand landmark indices** - these are standardized (0-20)  
-❌ **Don't commit without testing on webcam** (for CV) or in simulation mode (for UV)
+---
 
-## Project Status
-**Phase**: Early prototype development  
-**Complete**: Hand tracking, UV control modules (independent)  
-**In Progress**: Documentation, safety validation  
-**Not Started**: Integration layer, web UI, automated application, safety sensors implementation
+## 🎯 Common Tasks
 
-## Questions or Unclear Patterns?
-- Check `docs/SOFTWARE_ARCHITECTURE.md` for detailed class designs and data flows
-- Review actual implementations in `software/` - code is primary documentation
-- Safety concerns: Always reference `docs/SAFETY.md`
-- Hardware questions: See `docs/HARDWARE_SETUP.md` for wiring and BOM
+### **Adding a New API Endpoint**
+1. Create controller in `src/controllers/`
+2. Add route in `src/routes/`
+3. Write service logic in `src/services/`
+4. Add validation middleware
+5. Write tests (unit + integration)
+6. Update API documentation
+
+### **Adding a New Database Model**
+1. Create model in `src/models/`
+2. Create migration in `migrations/`
+3. Add repository in `src/repositories/`
+4. Write tests
+5. Update docs
+
+### **Fixing a Bug**
+1. Write a failing test that reproduces the bug
+2. Fix the bug
+3. Verify test passes
+4. Add regression test if needed
+
+---
+
+## 💡 Performance Guidelines
+
+- **Database queries:** Use indexes, avoid N+1 queries
+- **API responses:** Paginate large datasets (max 100 items)
+- **Caching:** Cache expensive computations (Redis)
+- **Images:** Optimize and use CDN
+
+---
+
+## 📖 Documentation Standards
+
+- All public functions have JSDoc/docstrings
+- README updated when adding major features
+- API changes documented in `docs/api.md`
+- Architecture decisions recorded in `docs/decisions/`
+
+---
+
+## 🔗 Useful Links
+
+- **Repository:** [link to your repo]
+- **Documentation:** [link to docs]
+- **Staging:** [staging environment URL]
+- **Production:** [production URL]
+- **Monitoring:** [monitoring dashboard]
+
+---
+
+## 📝 Notes for AI Agents
+
+**This file helps the Autonomous Loop understand your project.**
+
+- Be specific about patterns and conventions
+- Update critical files list as project grows
+- Add examples of good/bad code patterns
+- Document any "gotchas" or non-obvious rules
+- Keep this file up to date - it's AI's "memory" of your project!
+
+---
+
+**Last Updated:** [Date]
+**Maintained By:** [Team/Person]

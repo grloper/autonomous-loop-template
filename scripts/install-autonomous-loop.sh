@@ -34,7 +34,7 @@ echo ""
 # Download template files
 echo "📥 Downloading automation files..."
 
-REPO_URL="https://github.com/grloper/gel-nails-machine"
+REPO_URL="https://github.com/grloper/autonomous-loop-template"
 TEMP_DIR=$(mktemp -d)
 
 # Clone just the .github directory
@@ -182,7 +182,8 @@ echo "━━━━━━━━━━━━━━━━━━━━━━━━�
 echo "📚 DOCUMENTATION:"
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 echo ""
-echo "  Full Setup Guide: https://github.com/grloper/gel-nails-machine/blob/main/AUTONOMOUS-LOOP-SETUP.md"
+echo "  Template Repo:    https://github.com/grloper/autonomous-loop-template"
+echo "  Full Setup Guide: https://github.com/grloper/autonomous-loop-template/blob/main/AUTONOMOUS-LOOP-SETUP.md"
 echo "  PR Review Flow:   .github/PR-REVIEW-FLOW.md"
 echo "  Example Project:  https://github.com/grloper/gel-nails-machine"
 echo ""

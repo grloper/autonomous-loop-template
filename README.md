@@ -318,10 +318,30 @@ SAFETY_THRESHOLDS = {
 
 | Problem | Solution |
 |---------|----------|
-| Orchestrator doesn't create issues | Lower `MIN_PRIORITY_SCORE` in `orchestrator.py` |
-| Copilot doesn't create PRs | Verify `@copilot` mention, check Copilot access |
-| PRs not auto-merging | Check `CRITICAL_FILES`, reduce thresholds |
-| Too many issues | Raise `MIN_PRIORITY_SCORE` |
+| **"Workflow not found"** | Wait 30 seconds after pushing `.github/workflows/`, then try again |
+| **Orchestrator doesn't create issues** | 1. Check if there are TODOs in code<br>2. Lower `MIN_PRIORITY_SCORE` in `orchestrator.py`<br>3. Run manually: `gh workflow run orchestrator.yml` |
+| **"PyGithub not found" error** | Workflows auto-install deps. If failing, check `requirements.txt` is present |
+| **Copilot doesn't create PRs** | 1. Verify GitHub Copilot access enabled<br>2. Check `@copilot` mention in issue comments<br>3. Ensure issue has proper labels |
+| **PRs not auto-merging** | 1. Check `CRITICAL_FILES` in `auto_reviewer.py`<br>2. Reduce `max_files_for_auto_merge` threshold<br>3. Verify PR passes all checks |
+| **Too many issues created** | 1. Use `focus_area` parameter when triggering<br>2. Raise `MIN_PRIORITY_SCORE` in orchestrator<br>3. Clean up TODOs/FIXMEs in code |
+| **"Permission denied" errors** | Verify repository has correct permissions in Settings → Actions → General → Workflow permissions (Read & Write) |
+| **Workflows show "action_required"** | Normal for draft PRs. Mark PR as "Ready for review" to trigger auto-review |
+| **Installer script fails** | 1. Check `git` and `gh` CLI installed<br>2. Ensure you're in git repository root<br>3. Run with `bash` not `sh` |
+
+### 🔍 **Common First-Time Issues**
+
+**"Nothing happens after install"**
+- Workflows don't run automatically until you trigger them or wait for schedule
+- Trigger manually: `gh workflow run orchestrator.yml`
+
+**"Auto-review approves everything"**
+- Update `CRITICAL_FILES` in `.github/scripts/auto_reviewer.py`
+- Add your security-critical paths
+
+**"System creates issues but no PRs"**
+- Check GitHub Copilot is enabled for your organization
+- Verify `@copilot` has access to your repository
+- Issues need time (~2-5 minutes) for Copilot to respond
 
 [Full troubleshooting guide →](./AUTONOMOUS-LOOP-SETUP.md#-troubleshooting)
 

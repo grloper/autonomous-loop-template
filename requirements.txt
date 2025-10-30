@@ -1,0 +1,22 @@
+# Autonomous Loop Dependencies
+# These are required for the automation workflows to function
+
+# GitHub API interaction
+PyGithub>=2.1.1
+
+# HTTP requests
+requests>=2.31.0
+
+# YAML parsing for workflow analysis
+pyyaml>=6.0
+
+# ===================================
+# Add your project dependencies below
+# ===================================
+
+# Example Python project dependencies:
+# numpy>=1.24.0
+# pandas>=2.0.0
+# flask>=2.3.0
+# django>=4.2.0
+# fastapi>=0.100.0
