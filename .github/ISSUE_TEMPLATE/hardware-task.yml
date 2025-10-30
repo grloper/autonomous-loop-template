@@ -1,0 +1,99 @@
+name: ⚡ Hardware Task
+description: Electronics, circuits, components, mechanical design
+title: "[HARDWARE] "
+labels: ["agent:hardware", "hardware"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Hardware Agent Request
+        This template triggers the **Hardware Agent** for electrical and mechanical tasks.
+        
+  - type: dropdown
+    id: hardware-type
+    attributes:
+      label: Hardware Type
+      description: What type of hardware work is needed?
+      options:
+        - Circuit Design
+        - Component Selection
+        - PCB Layout
+        - Wiring Diagram
+        - Mechanical Design
+        - Thermal Management
+        - Testing & Validation
+        - Troubleshooting
+        - BOM Update
+    validations:
+      required: true
+  
+  - type: textarea
+    id: description
+    attributes:
+      label: Task Description
+      description: Describe the hardware task or problem
+      placeholder: "Need to design LED driver circuit for 365nm UV strip, 12V, 3A max"
+    validations:
+      required: true
+  
+  - type: textarea
+    id: specifications
+    attributes:
+      label: Technical Specifications
+      description: Provide detailed specs (voltage, current, dimensions, etc.)
+      placeholder: |
+        - Input: 12V DC
+        - Output: PWM controlled, 0-100%
+        - Load: UV LED strip, 3A maximum
+        - Control: Raspberry Pi GPIO (3.3V logic)
+        - PWM Frequency: 1kHz
+  
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Constraints & Requirements
+      description: Any limitations or must-haves?
+      placeholder: |
+        - Must fit in existing enclosure (200x150mm)
+        - Budget: <$50 for components
+        - Must be safe for 5 minute continuous operation
+        - Requires thermal protection
+  
+  - type: checkboxes
+    id: safety-critical
+    attributes:
+      label: Safety Critical
+      description: Is this safety-critical hardware?
+      options:
+        - label: "⚠️ This is safety-critical (requires Safety Agent review)"
+  
+  - type: textarea
+    id: current-status
+    attributes:
+      label: Current Status
+      description: What's been done so far?
+      placeholder: "Breadboarded basic circuit, MOSFET gets hot after 2 minutes"
+  
+  - type: checkboxes
+    id: deliverables
+    attributes:
+      label: Expected Deliverables
+      description: What outputs are needed?
+      options:
+        - label: Schematic diagram
+        - label: PCB layout
+        - label: Wiring diagram
+        - label: Component BOM with part numbers
+        - label: Test protocol
+        - label: Assembly instructions
+        - label: Datasheets
+  
+  - type: textarea
+    id: related-work
+    attributes:
+      label: Related Work
+      description: Link to related issues, PRs, or documentation
+      placeholder: |
+        - Related to #123 (UV LED research)
+        - Depends on #456 (power supply selection)

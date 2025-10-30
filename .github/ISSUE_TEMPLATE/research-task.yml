@@ -1,0 +1,84 @@
+name: 🔬 Research Task
+description: Scientific research, physics, biology, chemistry questions
+title: "[RESEARCH] "
+labels: ["agent:research", "needs-research"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Research Agent Request
+        This template triggers the **Research Agent** to investigate scientific and technical questions.
+        
+  - type: dropdown
+    id: research-domain
+    attributes:
+      label: Research Domain
+      description: Which scientific area does this relate to?
+      options:
+        - UV Physics & Wavelengths
+        - Gel Chemistry & Polymerization
+        - Biology & Skin Safety
+        - Materials Science
+        - Toxicology & Chemical Safety
+        - Safety Standards & Compliance
+        - Other
+    validations:
+      required: true
+  
+  - type: textarea
+    id: research-question
+    attributes:
+      label: Research Question
+      description: What specific question needs investigation?
+      placeholder: "Example: What is the optimal UV wavelength for curing gel polish with photoinitiator X?"
+    validations:
+      required: true
+  
+  - type: textarea
+    id: context
+    attributes:
+      label: Context & Background
+      description: Provide context about why this research is needed
+      placeholder: "Currently using 405nm LEDs, but curing takes 90 seconds. Wondering if 365nm would be faster."
+  
+  - type: textarea
+    id: current-findings
+    attributes:
+      label: Current Findings (if any)
+      description: Any preliminary research or information you already have
+      placeholder: "Found a paper suggesting 365nm is better, but unsure about safety implications"
+  
+  - type: dropdown
+    id: priority
+    attributes:
+      label: Priority
+      options:
+        - Low - Nice to know
+        - Medium - Would help optimization
+        - High - Blocking development
+        - Critical - Safety concern
+    validations:
+      required: true
+  
+  - type: checkboxes
+    id: agent-collab
+    attributes:
+      label: Collaboration Needed
+      description: Which other agents should be involved?
+      options:
+        - label: Hardware Agent (electrical/mechanical implications)
+        - label: Software Agent (algorithm/control implications)
+        - label: Safety Agent (safety review required)
+        - label: Design Agent (material/enclosure implications)
+  
+  - type: textarea
+    id: success-criteria
+    attributes:
+      label: Success Criteria
+      description: What would constitute a satisfactory answer?
+      placeholder: |
+        - Specific wavelength recommendation with evidence
+        - Safety analysis of proposed wavelength
+        - Cost/benefit comparison
+        - Implementation guidance

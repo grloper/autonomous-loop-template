@@ -1,0 +1,126 @@
+name: 💻 Software Task
+description: Code, algorithms, computer vision, control systems
+title: "[SOFTWARE] "
+labels: ["agent:software", "software"]
+assignees: []
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## Software Agent Request
+        This template triggers the **Software Agent** for development tasks.
+        
+  - type: dropdown
+    id: software-type
+    attributes:
+      label: Task Type
+      description: What type of software work is needed?
+      options:
+        - Feature Implementation
+        - Bug Fix
+        - Performance Optimization
+        - Code Refactoring
+        - Testing
+        - Documentation
+        - Integration
+    validations:
+      required: true
+  
+  - type: dropdown
+    id: module
+    attributes:
+      label: Module
+      description: Which module does this affect?
+      options:
+        - hand_tracking
+        - uv_control
+        - integration (future)
+        - tests
+        - configuration
+        - utilities
+        - all/multiple
+    validations:
+      required: true
+  
+  - type: textarea
+    id: description
+    attributes:
+      label: Task Description
+      description: Describe what needs to be implemented or fixed
+      placeholder: "Implement pulsed UV mode to reduce heat buildup during long curing sessions"
+    validations:
+      required: true
+  
+  - type: textarea
+    id: current-behavior
+    attributes:
+      label: Current Behavior (for bugs)
+      description: What currently happens?
+      placeholder: "UV LEDs run continuously, causing temperature to reach 80°C after 2 minutes"
+  
+  - type: textarea
+    id: expected-behavior
+    attributes:
+      label: Expected Behavior
+      description: What should happen?
+      placeholder: "UV LEDs should pulse at 80% duty cycle, keeping temperature below 60°C"
+  
+  - type: textarea
+    id: technical-approach
+    attributes:
+      label: Proposed Technical Approach
+      description: How should this be implemented?
+      placeholder: |
+        1. Add `pulse_mode` parameter to `CuringProfile`
+        2. Implement `_cure_pulsed()` method in `UVLEDController`
+        3. Add timing logic: 400ms on, 100ms off (80% duty)
+        4. Update curing profiles to support pulsing
+  
+  - type: checkboxes
+    id: requirements
+    attributes:
+      label: Requirements
+      description: Check all that apply
+      options:
+        - label: Must work in simulation mode
+        - label: Requires hardware testing
+        - label: Needs unit tests
+        - label: Needs integration tests
+        - label: Requires performance benchmarking
+        - label: Safety-critical (requires Safety Agent review)
+        - label: Affects other modules (requires coordination)
+  
+  - type: textarea
+    id: acceptance-criteria
+    attributes:
+      label: Acceptance Criteria
+      description: How do we know this is done?
+      placeholder: |
+        - [ ] Pulsed mode implemented in `led_controller.py`
+        - [ ] New `CuringProfile` includes pulse parameters
+        - [ ] Tested in simulation mode
+        - [ ] Tested on hardware (temperature stays <60°C)
+        - [ ] Unit tests added
+        - [ ] Documentation updated
+  
+  - type: textarea
+    id: performance-impact
+    attributes:
+      label: Expected Performance Impact
+      description: How will this affect performance?
+      placeholder: |
+        - FPS: No change (UV control is async)
+        - Memory: +5KB for pulse state tracking
+        - CPU: +2% for pulse timing
+        - Temperature: -20°C improvement
+  
+  - type: checkboxes
+    id: agent-collab
+    attributes:
+      label: Collaboration Needed
+      description: Which other agents should be involved?
+      options:
+        - label: Research Agent (need scientific validation)
+        - label: Hardware Agent (hardware implications)
+        - label: Safety Agent (safety review required)
+        - label: Integration Agent (affects multiple modules)

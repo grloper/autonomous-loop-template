@@ -1,0 +1,130 @@
+name: "🎯 Orchestrator - Autonomous Project Lead"
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'Orchestrator Mode'
+        required: true
+        type: choice
+        options:
+          - 'full-analysis'
+          - 'quick-check'
+          - 'emergency-review'
+        default: 'full-analysis'
+      
+      focus_area:
+        description: 'Focus Area'
+        required: false
+        type: choice
+        options:
+          - 'all'
+          - 'safety'
+          - 'software'
+          - 'hardware'
+          - 'integration'
+        default: 'all'
+  
+  schedule:
+    - cron: '0 8 * * 1'  # Every Monday at 8 AM UTC
+
+permissions:
+  contents: write
+  issues: write
+  pull-requests: write
+
+jobs:
+  orchestrator:
+    name: "🎯 Master Orchestrator"
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: 📥 Checkout Repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+      
+      - name: 📦 Install Dependencies
+        run: |
+          pip install PyGithub requests
+      
+      - name: 🎯 Run Orchestrator Analysis
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          ORCHESTRATOR_MODE: ${{ github.event.inputs.mode || 'scheduled' }}
+          FOCUS_AREA: ${{ github.event.inputs.focus_area || 'all' }}
+        run: |
+          python .github/scripts/orchestrator.py
+      
+      - name: 💾 Upload Analysis Report
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: orchestrator-report-${{ github.run_id }}
+          path: orchestrator_report.md
+      
+      - name: 🤖 Trigger Copilot Coding Agents
+        uses: actions/github-script@v7
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          script: |
+            const fs = require('fs');
+            const reportContent = fs.readFileSync('orchestrator_report.md', 'utf8');
+            
+            // Extract issue numbers from report
+            const issueMatches = reportContent.matchAll(/#(\d+):/g);
+            const issueNumbers = [...issueMatches].map(m => parseInt(m[1]));
+            
+            console.log(`Found ${issueNumbers.length} issues to assign Copilot coding agents`);
+            
+            for (const issueNum of issueNumbers) {
+              try {
+                // Get issue details
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum
+                });
+                
+                console.log(`Triggering Copilot agent for issue #${issueNum}: ${issue.title}`);
+                
+                // Add a comment to signal intent (Copilot coding agent will auto-detect and create PR)
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNum,
+                  body: `🚀 **Copilot Coding Agent Activated**\n\nAutomatic PR creation initiated for this issue.\n\n_This is part of the autonomous development loop. The coding agent will analyze the requirements and create a pull request shortly._`
+                });
+                
+                console.log(`✅ Copilot agent triggered for #${issueNum}`);
+              } catch (error) {
+                console.error(`❌ Failed to trigger agent for #${issueNum}:`, error.message);
+              }
+            }
+      
+      - name: 🎉 Orchestrator Complete
+        run: |
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "🎯 ORCHESTRATOR RUN COMPLETE"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          echo "✅ Project analyzed"
+          echo "✅ Priorities identified"
+          echo "✅ Issues created"
+          echo "✅ Agents triggered"
+          echo "✅ Report generated"
+          echo ""
+          echo "🤖 The project is now self-managing!"
+          echo ""
+          echo "Next automatic review: Next Monday at 8am UTC"
+          echo "Manual trigger: Click 'Run workflow' button anytime"
+          echo ""
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
