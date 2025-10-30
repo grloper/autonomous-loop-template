@@ -22,8 +22,10 @@ permissions:
 
 jobs:
   diagnose-and-fix:
-    # Only run if workflow failed OR manual trigger
-    if: github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch'
+    # Only run if workflow ACTUALLY failed (not action_required from draft PRs)
+    if: |
+      (github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch') &&
+      github.event.workflow_run.conclusion != 'action_required'
     runs-on: ubuntu-latest
     
     steps:
