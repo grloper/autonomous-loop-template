@@ -82,7 +82,16 @@ nano .github/copilot-instructions.md
 nano .github/scripts/auto_reviewer.py
 ```
 
-### 3️⃣ Activate
+### 3️⃣ Verify Setup (Optional but Recommended)
+
+```bash
+# Check that everything is installed correctly
+curl -sL https://raw.githubusercontent.com/grloper/autonomous-loop-template/main/scripts/verify-setup.sh | bash
+```
+
+This will check for missing files, configuration issues, and give you a health report.
+
+### 4️⃣ Activate
 
 ```bash
 # Commit the automation
