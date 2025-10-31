@@ -18,13 +18,19 @@
 
 ---
 
-## 🎬 See It In Action
+## 🎬 How It Works
 
-**Live Example:** [gel-nails-machine](https://github.com/grloper/gel-nails-machine)
-- [Orchestrator Runs](https://github.com/grloper/gel-nails-machine/actions/workflows/orchestrator.yml)
-- [Auto-Created Issues](https://github.com/grloper/gel-nails-machine/issues?q=is%3Aissue+author%3Agithub-actions)
-- [AI-Generated PRs](https://github.com/grloper/gel-nails-machine/pulls?q=is%3Apr+author%3Acopilot-swe-agent)
-- [Self-Healing in Action](https://github.com/grloper/gel-nails-machine/issues?q=label%3Aworkflow-failure)
+Watch your repository evolve autonomously:
+
+1. **📊 Orchestrator scans** your code weekly (or on-demand)
+2. **🎯 Creates prioritized issues** (bugs, missing tests, TODOs)
+3. **🤖 Auto-assigns AI agents** via @copilot mention
+4. **💻 Agents create PRs** with actual implementations
+5. **✅ Auto-reviewer validates** safety and quality
+6. **🔀 Safe changes auto-merge** (docs, tests, low-risk fixes)
+7. **🏥 Self-heals** when workflows break
+
+**Result:** Your repository improves itself while you focus on features! 🚀
 
 ---
 
@@ -415,7 +421,7 @@ gh pr list  # PRs auto-created and reviewed!
 
 - **Issues:** [GitHub Issues](https://github.com/grloper/autonomous-loop-template/issues)
 - **Discussions:** [GitHub Discussions](https://github.com/grloper/autonomous-loop-template/discussions)
-- **Example:** [Live Implementation](https://github.com/grloper/gel-nails-machine)
+- **Documentation:** [Full Setup Guide](./AUTONOMOUS-LOOP-SETUP.md)
 
 ---
 

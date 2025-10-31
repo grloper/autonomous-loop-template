@@ -185,7 +185,7 @@ echo ""
 echo "  Template Repo:    https://github.com/grloper/autonomous-loop-template"
 echo "  Full Setup Guide: https://github.com/grloper/autonomous-loop-template/blob/main/AUTONOMOUS-LOOP-SETUP.md"
 echo "  PR Review Flow:   .github/PR-REVIEW-FLOW.md"
-echo "  Example Project:  https://github.com/grloper/gel-nails-machine"
+echo "  Quick Start:      https://github.com/grloper/autonomous-loop-template/blob/main/QUICKSTART.md"
 echo ""
 
 echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
