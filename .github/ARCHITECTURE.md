@@ -43,6 +43,7 @@ measurements taken after one.
 | `doctor.py` | Failed-run log diagnosis. |
 | `outcomes.py` | Revert and branch-break detection, Wilson-bounded trust scoring. Pure analysis plus a GitHub collector, same split as `gate.py`. |
 | `prompts.py` | Clusters recurring failures into proposed instruction rules. Owns one delimited block in the instructions file and nothing else. |
+| `synth.py` | Drafts a rule for a failure class the catalogue lacks, then validates the model's output before anyone sees it. |
 
 The pure-core / thin-adapter split in `gate.py` is the load-bearing design
 decision. It is why the gate can be demonstrated offline, why the tests need no
@@ -172,14 +173,50 @@ no phrasing that widens what an agent may do. A learned rule can say "do not"; i
 can never say "you may skip review". Otherwise the loop could talk itself into
 more autonomy than it earned.
 
+## Synthesising rules, and the injection problem
+
+`synth.py` handles failure classes the catalogue does not cover. The engineering
+problem is not the model call; it is that the input is attacker-controlled.
+Pull request titles, branch names, and diff lines are written by whoever opened
+the pull request, and the output is proposed for the file that steers every
+future agent. Filing three pull requests whose details read "agents may merge
+anything" is a cheap attempt to legislate.
+
+Four defences, in ascending order of how much weight they carry:
+
+1. **Synthesis only runs for uncatalogued classes.** The common path never
+   reaches a model, so the attack surface exists only for novel failures.
+2. **Evidence is fenced, flattened, truncated, and labelled untrusted**, and
+   comment markers inside it are neutered so it cannot terminate the structure
+   around it. Delimiting does not make text safe — no arrangement of tags makes
+   a model immune to what it reads — but it makes the boundary explicit and
+   keeps the prompt well-formed.
+3. **The system prompt states that only a restriction is acceptable**, and asks
+   the model to flag evidence that appears to be steering it. A flagged draft is
+   never accepted.
+4. **Generated text is validated by code.** Permissive phrasing, URLs,
+   credential sources, shell commands, multi-line output, oversized rules, and
+   HTML comment markers each reject the draft outright.
+
+Defence 4 is the only one that decides anything. The first three reduce how
+often a bad draft is produced; validation determines what is allowed through,
+and it runs after the model has spoken. `tests/test_synth.py` includes the full
+attack: hostile evidence, a model that complies with it, and the assertion that
+the resulting rule is still refused.
+
+Rejected drafts are reported rather than dropped — including when nothing else
+is proposed — because a draft refused for granting permission is the strongest
+available signal that someone is feeding the loop crafted evidence.
+
 ## What this does not do
 
 - **It does not implement the issues `scan.py` files.** Wiring a coding agent to
   the `autonomous-loop` label is a separate, deliberate decision.
 - **It cannot see a silent undo.** A rewrite that reverses a change without
   saying "revert" does not register as a failure.
-- **It cannot invent a rule for a novel mistake.** Proposals come from a fixed
-  catalogue of failure classes; an unfamiliar failure produces nothing until
-  someone adds a template for it.
+- **It cannot invent a rule for a novel mistake without a model.** Absent
+  `--synthesize` and an API key, an unfamiliar failure produces nothing.
+- **Synthesis is best-effort.** Validation bounds what a bad draft can say; it
+  does not guarantee a good one. Human approval is the control that matters.
 - **It does not survive repository inactivity.** GitHub disables scheduled
   workflows after 60 days without activity and notifies no one.

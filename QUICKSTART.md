@@ -23,6 +23,9 @@ python .github/scripts/doctor.py --repo owner/name --run-id 123456789
 python .github/scripts/prompts.py --repo owner/name --days 90
 python .github/scripts/prompts.py --repo owner/name --min-occurrences 5
 
+# Also draft rules for failure classes the catalogue lacks (needs ANTHROPIC_API_KEY)
+python .github/scripts/prompts.py --repo owner/name --synthesize
+
 # Measure which agents' merges actually survived
 python .github/scripts/outcomes.py --repo owner/name --days 90
 python .github/scripts/outcomes.py --repo owner/name --days 90 --write
@@ -87,3 +90,7 @@ Each corresponds to a defect that shipped once. `verify-setup.sh` enforces them.
    its own guardrails can remove them.
 10. **Learned rules constrain, never permit.** No rule may widen what an agent
     is allowed to do, or the loop can grant itself autonomy.
+11. **Model-drafted rules are validated after generation.** The prompt asks for
+    a restriction; `validate_rule()` decides whether it got one. Removing that
+    check makes the synthesiser a prompt-injection amplifier, since its evidence
+    comes from pull requests anyone can open.

@@ -60,6 +60,7 @@ class Proposal:
     evidence: list = field(default_factory=list)   # PR numbers
     authors: list = field(default_factory=list)
     action: str = "add"                            # add | retire
+    synthesized: bool = False                      # drafted by a model, not the catalogue
 
     @property
     def occurrences(self) -> int:
@@ -134,6 +135,49 @@ RULE_CATALOGUE = {
         "rationale": "{n} pull requests weakened a security control.",
     },
 }
+
+
+def uncatalogued(failures, min_occurrences: int = 3) -> dict:
+    """Recurring failure classes the hand-written catalogue does not cover.
+
+    These are the only clusters worth spending a model call on. Known classes
+    stay deterministic: same input, same rule, no cost, no network.
+    """
+    by_category = defaultdict(list)
+    for f in failures:
+        if f.category not in RULE_CATALOGUE:
+            by_category[f.category].append(f)
+    return {c: rs for c, rs in by_category.items() if len(rs) >= min_occurrences}
+
+
+def synthesize_proposals(failures, min_occurrences: int = 3, client=None) -> tuple:
+    """(proposals, rejections) for failure classes with no catalogue entry.
+
+    Every synthesised rule is marked `synthesized` so a reviewer knows a model
+    drafted it. Rejected drafts are returned too — a rule refused because it
+    granted permission is worth seeing, since it usually means the evidence was
+    trying to steer the output.
+    """
+    import synth
+
+    proposals, rejections = [], []
+    for category, records in uncatalogued(failures, min_occurrences).items():
+        evidence = [r.detail for r in records if r.detail] or [category]
+        numbers = sorted({r.pr_number for r in records})
+        result = synth.synthesize(category, evidence, numbers, client=client)
+        if not result.accepted:
+            rejections.append((category, result.rejection, result.rule))
+            continue
+        proposals.append(Proposal(
+            category=result.category or category,
+            rule=result.rule,
+            rationale=result.rationale,
+            evidence=numbers,
+            authors=sorted({r.author for r in records if r.author}),
+            synthesized=True,
+        ))
+    proposals.sort(key=lambda p: p.occurrences, reverse=True)
+    return proposals, rejections
 
 
 def cluster(failures, min_occurrences: int = 3) -> list:
@@ -235,9 +279,15 @@ def apply_block(text: str, block: str) -> str:
     return f"{text}{separator}{block}\n"
 
 
-def render_report(proposals, stale, instructions_path: str) -> str:
-    """Human-facing proposal, written to be accepted or rejected per rule."""
-    if not proposals and not stale:
+def render_report(proposals, stale, instructions_path: str, rejections=None) -> str:
+    """Human-facing proposal, written to be accepted or rejected per rule.
+
+    Rejections are reported even when nothing else is, because a draft refused
+    for granting permission is the strongest available signal that someone is
+    feeding the loop crafted evidence.
+    """
+    rejections = rejections or []
+    if not proposals and not stale and not rejections:
         return ("No instruction changes proposed. No failure class recurred often "
                 "enough to justify a rule.\n")
 
@@ -254,8 +304,9 @@ def render_report(proposals, stale, instructions_path: str) -> str:
         for p in proposals:
             evidence = ", ".join(f"#{n}" for n in p.evidence[:10])
             who = ", ".join(f"`{a}`" for a in p.authors[:4]) or "various"
+            origin = " _(drafted by a model — read it carefully)_" if p.synthesized else ""
             out += [
-                f"**{p.category}** — seen {p.occurrences}×",
+                f"**{p.category}** — seen {p.occurrences}×{origin}",
                 "",
                 f"> {p.rule}",
                 "",
@@ -268,6 +319,21 @@ def render_report(proposals, stale, instructions_path: str) -> str:
         out += ["### Retire", ""]
         for p in stale:
             out += [f"**{p.category}** — {p.rationale}", ""]
+    if rejections:
+        out += [
+            "### Rejected drafts",
+            "",
+            "A model drafted these and validation refused them. A rule rejected "
+            "for granting permission usually means the evidence was trying to "
+            "steer the output — worth reading the cited pull requests.",
+            "",
+        ]
+        for category, reason, text in rejections:
+            out += [f"- **{category}** — {reason}"]
+            if text:
+                out += [f"  > {text[:200]}"]
+        out += [""]
+
     out += [
         "---",
         "",
@@ -357,6 +423,9 @@ def main() -> int:
     parser.add_argument("--min-occurrences", type=int, default=3)
     parser.add_argument("--retire-after", type=int, default=100,
                         help="clean PRs before a rule is proposed for retirement")
+    parser.add_argument("--synthesize", action="store_true",
+                        help="draft rules for failure classes the catalogue lacks "
+                             "(requires ANTHROPIC_API_KEY)")
     parser.add_argument("--apply", action="store_true",
                         help="write the managed block (for a human-reviewed PR)")
     args = parser.parse_args()
@@ -377,8 +446,21 @@ def main() -> int:
     print(f"{len(failures)} failure records across {considered} pull requests.")
 
     proposals = cluster(failures, args.min_occurrences)
+    rejections = []
+    if args.synthesize:
+        import synth
+
+        if not synth.available():
+            print("::warning::--synthesize requested but no Anthropic client is "
+                  "configured; falling back to the catalogue only.")
+        else:
+            drafted, rejections = synthesize_proposals(
+                failures, args.min_occurrences)
+            print(f"{len(drafted)} synthesised, {len(rejections)} rejected.")
+            proposals += drafted
+
     stale = find_stale(existing_rules, failures, args.retire_after, considered)
-    report = render_report(proposals, stale, args.instructions)
+    report = render_report(proposals, stale, args.instructions, rejections)
     print("\n" + report)
 
     if args.apply and proposals:

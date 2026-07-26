@@ -25,6 +25,7 @@ for f in \
   ".github/scripts/injection.py" \
   ".github/scripts/outcomes.py" \
   ".github/scripts/prompts.py" \
+  ".github/scripts/synth.py" \
   ".github/scripts/requirements.txt"
 do
   [[ -f "$f" ]] && ok "$f" || bad "$f is missing"
@@ -99,7 +100,16 @@ else
   ok "instruction changes are proposed, never auto-applied"
 fi
 
-# 8. The scanner must exclude by path component, not substring.
+# 8. Model-drafted rules must be validated after generation, not merely asked for.
+if grep -q 'PERMISSIVE_PHRASES' .github/scripts/synth.py 2>/dev/null &&
+   grep -q 'def validate_rule' .github/scripts/synth.py 2>/dev/null &&
+   grep -q 'ok, reason = validate_rule' .github/scripts/synth.py 2>/dev/null; then
+  ok "synthesised rules are validated after generation"
+else
+  bad "synth.py does not validate model output — a drafted rule could grant permission"
+fi
+
+# 9. The scanner must exclude by path component, not substring.
 if grep -q "'.git' in str(" .github/scripts/scan.py 2>/dev/null; then
   bad "scan.py excludes by substring — '.git' also matches '.github', hiding that tree"
 else

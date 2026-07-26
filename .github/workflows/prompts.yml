@@ -44,17 +44,23 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: pip install -r .github/scripts/requirements.txt
+        run: |
+          pip install -r .github/scripts/requirements.txt
+          if [ -n "${{ secrets.ANTHROPIC_API_KEY }}" ]; then pip install "anthropic>=0.40,<1"; fi
 
       - name: Analyse failures
         id: analyse
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Optional. Without it, synthesis is skipped and the hand-written
+          # catalogue still produces proposals.
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
           python .github/scripts/prompts.py \
             --repo "${{ github.repository }}" \
             --days "${{ inputs.days || '90' }}" \
-            --min-occurrences "${{ inputs.min_occurrences || '3' }}"
+            --min-occurrences "${{ inputs.min_occurrences || '3' }}" \
+            ${{ inputs.synthesize == true && '--synthesize' || '' }}
 
       - name: File or update the proposal
         if: steps.analyse.outputs.has_proposals == 'true'
