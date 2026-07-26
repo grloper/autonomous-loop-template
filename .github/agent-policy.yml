@@ -101,7 +101,9 @@ trust:
 #   warn  — reported, blocks auto-merge, does not request changes
 diff_rules:
   - id: eval
-    pattern: '\beval\s*\('
+    # Requires a non-empty argument, so prose that mentions "eval()" is not a
+    # finding. Measured at 1.2% false positives on 400 real files before this.
+    pattern: '\beval\s*\(\s*[^)\s]'
     severity: block
     message: uses eval()
 
@@ -111,17 +113,30 @@ diff_rules:
     message: shell=True subprocess call
 
   - id: curl-pipe-sh
-    pattern: 'curl[^\n|]*\|\s*(ba)?sh'
+    # `| sudo bash` and `| env X=1 sh` slipped past the first version.
+    pattern: '(?i)\b(curl|wget)\b[^\n|]*\|[^\n]{0,40}\b(ba|z|k|da)?sh\b'
     severity: block
     message: pipes a download into a shell
 
   - id: hardcoded-secret
-    pattern: '(?i)\b(api[_-]?key|secret|password|token|private[_-]?key)\b\s*[=:]\s*[''"][^''"]{8,}'
+    # The value must look like a secret: no spaces, secret-ish charset, closing
+    # quote. Without that, `print("shlex: token=" + repr(raw))` matched.
+    pattern: '(?i)\b(api[_-]?key|secret|password|token|private[_-]?key)\b\s*[=:]\s*[''"][A-Za-z0-9_\-./+=]{8,}[''"]'
     severity: block
     message: looks like a hardcoded credential
 
+  - id: credential-literal
+    # Matches the value rather than the variable name, so `k = "ghp_..."`
+    # is caught even though `k` means nothing. Provider prefixes are
+    # unambiguous, which makes this both high-recall and low-false-positive.
+    # Added after red-teaming found `key = "sk-live-" + "abc123"` merging.
+    pattern: '(?i)\b(sk-(live|proj|ant)-[a-z0-9_-]{8,}|gh[pousr]_[a-z0-9]{16,}|AKIA[0-9A-Z]{12,}|xox[baprs]-[a-z0-9-]{10,}|-----BEGIN [A-Z ]*PRIVATE KEY-----)'
+    severity: block
+    message: contains a credential literal
+
   - id: tls-off
-    pattern: '(?i)(verify\s*=\s*False|rejectUnauthorized\s*:\s*false)'
+    # `verify=0` and `verify=None` disable it just as effectively.
+    pattern: '(?i)(\bverify\s*=\s*(False|0|None|[''"]?no[''"]?)\b|rejectUnauthorized\s*:\s*false)'
     severity: block
     message: disables TLS verification
 
@@ -136,7 +151,8 @@ diff_rules:
     message: grants write-all permissions
 
   - id: id-token
-    pattern: '(?i)id-token:\s*write'
+    # Matches YAML `id-token: write` and JSON `"id-token": "write"`.
+    pattern: '(?i)[''"]?id-token[''"]?\s*:\s*[''"]?write'
     severity: block
     message: >-
       requests an OIDC token; combined with contents: write this is the

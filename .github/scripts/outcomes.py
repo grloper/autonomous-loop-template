@@ -322,6 +322,37 @@ def collect_from_github(repo, days: int):
     return changes, reverts, breaks
 
 
+def open_repo(repo_name: str):
+    """Connect to GitHub, or explain why not without a traceback.
+
+    Found in real use: a token missing a scope produced a thirty-line PyGithub
+    traceback in the workflow log. The gate already fails with one clear line;
+    these did not.
+    """
+    try:
+        from github import Github
+    except ImportError:
+        print("::error::PyGithub is not installed. "
+              "Run: pip install -r .github/scripts/requirements.txt")
+        return None
+    token = os.environ.get("GITHUB_TOKEN")
+    if not token:
+        print("::error::$GITHUB_TOKEN is not set.")
+        return None
+    try:
+        from github import Auth
+
+        return Github(auth=Auth.Token(token)).get_repo(repo_name)
+    except Exception as exc:  # noqa: BLE001
+        detail = str(exc)
+        if "403" in detail or "404" in detail:
+            print(f"::error::Cannot read {repo_name} ({detail.splitlines()[0]}). "
+                  f"The token needs `contents: read` and `pull-requests: read`.")
+        else:
+            print(f"::error::Could not connect to GitHub: {detail.splitlines()[0]}")
+        return None
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Measure whether merged changes survived.")
     parser.add_argument("--repo", default=os.environ.get("GITHUB_REPOSITORY"))
@@ -339,9 +370,9 @@ def main() -> int:
         print("::error::--repo and $GITHUB_TOKEN are required.")
         return 1
 
-    from github import Github
-
-    repo = Github(os.environ["GITHUB_TOKEN"]).get_repo(args.repo)
+    repo = open_repo(args.repo)
+    if repo is None:
+        return 1
     changes, reverts, breaks = collect_from_github(repo, args.days)
     print(f"{len(changes)} merged PRs, {len(reverts)} revert events, "
           f"{len(breaks)} failing commits in the last {args.days} days.")

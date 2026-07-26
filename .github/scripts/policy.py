@@ -12,6 +12,7 @@ someone signs off on.
 from __future__ import annotations
 
 import fnmatch
+import posixpath
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -84,12 +85,16 @@ DEFAULT_POLICY = {
          "severity": "block", "message": "shell=True subprocess call"},
         {"id": "os-system", "pattern": r"\bos\.system\s*\(", "severity": "block",
          "message": "uses os.system()"},
-        {"id": "curl-pipe-sh", "pattern": r"curl[^\n|]*\|\s*(ba)?sh",
+        {"id": "curl-pipe-sh",
+         # `| sudo bash` and `| env X=1 sh` slipped past the first version.
+         "pattern": r"(?i)\b(curl|wget)\b[^\n|]*\|[^\n]{0,40}\b(ba|z|k|da)?sh\b",
          "severity": "block", "message": "pipes a download into a shell"},
         {"id": "hardcoded-secret",
          "pattern": r"(?i)\b(api[_-]?key|secret|password|token|private[_-]?key)\b\s*[=:]\s*['\"][^'\"]{8,}",
          "severity": "block", "message": "looks like a hardcoded credential"},
-        {"id": "tls-off-py", "pattern": r"(?i)verify\s*=\s*False",
+        {"id": "tls-off-py",
+         # `verify=0` and `verify=None` disable it just as effectively.
+         "pattern": r"(?i)\bverify\s*=\s*(False|0|None|['\"]?no['\"]?)\b",
          "severity": "block", "message": "disables TLS verification"},
         {"id": "tls-off-node", "pattern": r"(?i)rejectUnauthorized\s*:\s*false",
          "severity": "block", "message": "disables TLS verification"},
@@ -101,7 +106,9 @@ DEFAULT_POLICY = {
         {"id": "write-all", "pattern": r"(?i)permissions:\s*write-all",
          "severity": "block", "message": "grants write-all permissions"},
         {"id": "id-token",
-         "pattern": r"(?i)id-token:\s*write", "severity": "block",
+         # Matches YAML `id-token: write` and JSON `"id-token": "write"`.
+         "pattern": r"(?i)['\"]?id-token['\"]?\s*:\s*['\"]?write",
+         "severity": "block",
          "message": "requests an OIDC token — combined with contents: write this is the documented exfiltration path"},
         {"id": "chmod-777", "pattern": r"\bchmod\s+(-R\s+)?777\b",
          "severity": "block", "message": "world-writable permissions"},
@@ -161,10 +168,36 @@ class Policy:
         return match_any(path, self.protected_paths)
 
 
+def normalise_path(path: str) -> str:
+    """Collapse a path before matching it against globs.
+
+    `docs/../.github/workflows/ci.yml` must not slip past a `.github/**`
+    pattern by wearing a prefix. Found by adversarial testing: fnmatch compares
+    strings, so an un-normalised traversal defeated every protected-path rule.
+    """
+    cleaned = (path or "").replace("\\", "/").strip()
+    cleaned = posixpath.normpath(cleaned)
+    return cleaned[2:] if cleaned.startswith("./") else cleaned.lstrip("/")
+
+
+def path_is_suspicious(path: str) -> bool:
+    """A path that still escapes after normalising is never safe."""
+    normalised = normalise_path(path)
+    return normalised.startswith("../") or normalised == ".." or "\x00" in (path or "")
+
+
 def match_any(path: str, globs) -> bool:
-    """Glob match that also tries a leading slash, so '**/x' matches 'x'."""
-    return any(fnmatch.fnmatch(path, g) or fnmatch.fnmatch("/" + path, g)
-               for g in globs)
+    """Glob match on the normalised path, case-insensitively.
+
+    Case folding matters because `.GITHUB/workflows/` and `.github/workflows/`
+    are the same directory on macOS and Windows checkouts.
+    """
+    candidate = normalise_path(path).lower()
+    for glob in globs:
+        pattern = glob.lower()
+        if fnmatch.fnmatch(candidate, pattern) or fnmatch.fnmatch("/" + candidate, pattern):
+            return True
+    return False
 
 
 def _deep_merge(base: dict, override: dict) -> dict:

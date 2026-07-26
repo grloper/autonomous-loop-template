@@ -37,6 +37,11 @@ DEFAULT_CONFIG = {
     ],
     "max_file_bytes": 1_000_000,
     "max_issues_per_run": 5,
+    # Cap per file. Without this, a single file with dozens of markers takes
+    # every slot in a run, and keeps taking them every run — the scan reports
+    # the same file forever and never surfaces anything else. Observed on the
+    # Python stdlib, where one file held 22 of 308 findings and 4 of the top 5.
+    "max_issues_per_file": 1,
     "min_score": 3.0,
     # Marker keyword -> (impact, urgency, risk). Score = impact * urgency / risk.
     "marker_weights": {
@@ -47,8 +52,17 @@ DEFAULT_CONFIG = {
         "BUG": (8, 9, 3),
     },
     # Regexes that escalate a marker when they match the same line.
+    #
+    # Tuned against the Python standard library, where the first draft scored
+    # HTTP digest-auth commentary at maximum severity. Bare `auth` matched
+    # protocol vocabulary (`auth-int`, `auth-schemes`) and bare `token` matched
+    # lexer tokens, so the highest-priority findings in a 671-file scan were all
+    # descriptive prose in one file. Terms now have to be unambiguous.
     "escalations": {
-        r"(?i)\b(security|auth|authz|password|secret|token|credential|injection|xss|csrf)\b": 3.0,
+        r"(?i)\b(security|vulnerab\w*|exploit\w*|authz|authenticat\w+|"
+        r"password\w*|credential\w*|secret\w*|injection|sql ?injection|"
+        r"xss|csrf|ssrf|rce|priv(ilege)? ?esc\w*|"
+        r"(access|api|auth|bearer|refresh) ?tokens?)\b": 3.0,
         r"(?i)\b(crash\w*|corrupt\w*|data ?loss|race condition|deadlock\w*)\b": 2.0,
         r"(?i)\b(perf|performance|slow\w*|leak\w*)\b": 1.3,
     },
@@ -220,6 +234,27 @@ def scan_test_coverage(repo_root: Path, config: dict) -> list:
     )]
 
 
+def limit_per_file(findings, max_per_file: int):
+    """Keep at most `max_per_file` findings per source file.
+
+    Findings arrive sorted by score, so the highest-scoring marker in each file
+    survives. Returns (kept, held_back_count); held-back findings are not lost,
+    they simply wait for a later run once the earlier ones are resolved.
+    """
+    if max_per_file <= 0:
+        return findings, 0
+    seen: dict = {}
+    kept = []
+    for finding in findings:
+        key = finding.fingerprint_source.split("|")[1] if "|" in finding.fingerprint_source \
+            else finding.title
+        if seen.get(key, 0) >= max_per_file:
+            continue
+        seen[key] = seen.get(key, 0) + 1
+        kept.append(finding)
+    return kept, len(findings) - len(kept)
+
+
 def render_body(finding: Finding, run_id: str) -> str:
     return (
         f"{finding.body}\n"
@@ -268,6 +303,11 @@ def main() -> int:
     findings = [f for f in findings if f.score >= config["min_score"]]
     findings.sort(key=lambda f: f.score, reverse=True)
     print(f"{len(findings)} findings at or above min_score {config['min_score']}.")
+
+    findings, crowded = limit_per_file(findings, config["max_issues_per_file"])
+    if crowded:
+        print(f"Held back {crowded} lower-scoring finding(s) so no single file "
+              f"takes more than {config['max_issues_per_file']} slot(s) per run.")
 
     if not findings:
         print("Nothing actionable found. No issues filed.")

@@ -26,8 +26,37 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import re  # noqa: E402
+
 import injection  # noqa: E402
 import policy as policy_mod  # noqa: E402
+
+
+def changed_text(patch: str) -> str:
+    """Added and removed lines, normalised so a construct split across lines
+    is still visible to a single-line rule.
+
+    Adversarial testing found that every content rule could be evaded simply by
+    inserting a newline:
+
+        +api_key = (
+        +    "sk-live-abcdef123456"
+        +)
+
+    Each line on its own matches nothing. Rules are still applied per line as
+    well — this is an additional view, not a replacement, because the per-line
+    form gives better error messages when it does match.
+    """
+    body = "\n".join(
+        line[1:] for line in (patch or "").splitlines()
+        if line[:1] in "+-" and not line.startswith(("+++", "---"))
+    )
+    # Join string literals split by concatenation, drop line continuations and
+    # grouping punctuation, then collapse all whitespace to single spaces.
+    body = re.sub(r"\\\s*\n", " ", body)
+    body = re.sub(r"['\"]\s*\+\s*['\"]", "", body)
+    body = re.sub(r"[()\[\]{}]", " ", body)
+    return re.sub(r"\s+", " ", body).strip()
 
 
 @dataclass
@@ -112,6 +141,9 @@ def evaluate(pol: policy_mod.Policy, pr: PullRequestFacts,
     for f in pr.files:
         total_churn += f.churn
 
+        if policy_mod.path_is_suspicious(f.filename):
+            d.blockers.append(f"`{f.filename}` escapes the repository root")
+            d.protected_paths.append(f.filename)
         if pol.is_protected(f.filename):
             d.protected_paths.append(f.filename)
             d.blockers.append(f"`{f.filename}` is a protected path")
@@ -124,16 +156,33 @@ def evaluate(pol: policy_mod.Policy, pr: PullRequestFacts,
             d.blockers.append(f"`{f.filename}`: diff unavailable, so it cannot be inspected")
             continue
 
+        matched_rules = set()
         for line in f.patch.splitlines():
             if not line or line[0] not in "+-" or line.startswith(("+++", "---")):
                 continue
             for rule in pol.diff_rules:
-                if rule.matches(line):
-                    entry = f"`{f.filename}`: {rule.message} — `{line.strip()[:110]}`"
-                    if rule.severity == "block":
-                        d.findings.append(entry)
-                    else:
-                        d.blockers.append(f"{entry} (warning)")
+                if rule.id in matched_rules or not rule.matches(line):
+                    continue
+                matched_rules.add(rule.id)
+                entry = f"`{f.filename}`: {rule.message} — `{line.strip()[:110]}`"
+                if rule.severity == "block":
+                    d.findings.append(entry)
+                else:
+                    d.blockers.append(f"{entry} (warning)")
+
+        # Second pass over the normalised whole-hunk view, catching constructs
+        # a newline would otherwise hide from the per-line pass.
+        joined = changed_text(f.patch)
+        for rule in pol.diff_rules:
+            if rule.id in matched_rules or not rule.matches(joined):
+                continue
+            matched_rules.add(rule.id)
+            entry = (f"`{f.filename}`: {rule.message} — split across lines, "
+                     f"matched after normalising")
+            if rule.severity == "block":
+                d.findings.append(entry)
+            else:
+                d.blockers.append(f"{entry} (warning)")
 
         d.injection_signals.extend(injection.scan_diff(f.patch, f.filename))
 
@@ -286,7 +335,7 @@ def main() -> int:
     args = parser.parse_args()
 
     try:
-        from github import Github
+        from github import Auth, Github
 
         pol = policy_mod.load_policy(args.root)
         trusted: frozenset = frozenset()
@@ -298,7 +347,7 @@ def main() -> int:
             trusted = frozenset(outcomes.trusted_identities(
                 outcomes.load_ledger(ledger_path)))
 
-        gh_repo = Github(os.environ["GITHUB_TOKEN"]).get_repo(args.repo)
+        gh_repo = Github(auth=Auth.Token(os.environ["GITHUB_TOKEN"])).get_repo(args.repo)
         pr = gh_repo.get_pull(args.pr_number)
         facts = facts_from_github(gh_repo, pr)
         decision = evaluate(pol, facts, trusted)

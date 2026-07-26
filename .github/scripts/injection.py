@@ -149,11 +149,15 @@ def scan_text(text: str, location: str = "", require_imperative: bool = True) ->
 
     signals: list = []
     normalized = unicodedata.normalize("NFKC", text)
-    has_imperative = bool(IMPERATIVE.search(normalized))
+    # Patterns use `.` which does not cross newlines, so a payload wrapped over
+    # two lines evaded every rule. Match against a newline-collapsed view as
+    # well. Found by adversarial testing.
+    flattened = re.sub(r"\s+", " ", normalized)
+    has_imperative = bool(IMPERATIVE.search(flattened))
 
     for category, patterns, severity in CATEGORIES:
         for pattern, message in patterns:
-            match = re.search(pattern, normalized)
+            match = re.search(pattern, normalized) or re.search(pattern, flattened)
             if not match:
                 continue
             # The override category is definitionally an instruction, so it
@@ -163,7 +167,7 @@ def scan_text(text: str, location: str = "", require_imperative: bool = True) ->
                     and not has_imperative):
                 continue
             signals.append(Signal(category, severity, message,
-                                  _excerpt(normalized, match.start()), location))
+                                  _excerpt(flattened, match.start()), location))
 
     signals.extend(find_invisible(text, location))
 
