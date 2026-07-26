@@ -74,6 +74,28 @@ profiles:
     max_lines: 0
     require_ci: true
 
+# Earned autonomy.
+#
+# outcomes.py measures whether merged changes actually survived — were they
+# reverted, did they break the default branch — and writes a per-author score to
+# the ledger below. When enabled, an author rated `trusted` may additionally
+# auto-merge the paths listed here.
+#
+# It only ever widens the allowlist. A good track record never unlocks a
+# protected path and never relaxes CI, size, diff, or injection checks.
+#
+# Off by default: switching it on is a decision to let measured history change
+# what a machine can merge unattended.
+trust:
+  enabled: false
+  ledger: .github/agent-trust.json
+  min_sample: 20        # merges required before an author is rated at all
+  trusted: 0.95         # Wilson lower bound on survival needed for 'trusted'
+  watch: 0.80           # below this an author is 'untrusted'
+  trusted_auto_merge_paths:
+    # - "tests/**"      # e.g. let a proven agent merge its own test additions
+    # - "**/*.json"
+
 # Matched against added and removed lines of the diff.
 #   block — REQUEST_CHANGES
 #   warn  — reported, blocks auto-merge, does not request changes

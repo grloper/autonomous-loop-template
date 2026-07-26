@@ -15,7 +15,16 @@ pull_request ──▶ gate.py ──▶ review + verdict            [contents: 
 schedule ──────▶ scan.py ──▶ deduplicated issues         [issues: write]
 
 workflow_run ──▶ doctor.py ─▶ one issue per failure type [actions: read]
+
+schedule ──────▶ outcomes.py ▶ trust ledger + scoreboard [pull-requests: read]
+                    │
+                    └────────▶ read back by gate.py to widen the allowlist
 ```
+
+The loop closes at `outcomes.py`. Everything else in this repository is a
+prediction made before merge; that module is the only measurement taken after
+one, and therefore the only thing that can tell you whether the predictions
+were any good.
 
 ## Module layout
 
@@ -27,6 +36,7 @@ workflow_run ──▶ doctor.py ─▶ one issue per failure type [actions: rea
 | `demo.py` | Runs `evaluate()` over built-in scenarios. No network. |
 | `scan.py` | Marker scanning and issue filing. |
 | `doctor.py` | Failed-run log diagnosis. |
+| `outcomes.py` | Revert and branch-break detection, Wilson-bounded trust scoring. Pure analysis plus a GitHub collector, same split as `gate.py`. |
 
 The pure-core / thin-adapter split in `gate.py` is the load-bearing design
 decision. It is why the gate can be demonstrated offline, why the tests need no
@@ -105,12 +115,33 @@ policy ships a `diff_rules` entry that flags exactly that combination.
 `scripts/verify-setup.sh` asserts each property and fails the build on
 regression.
 
+## Earned autonomy
+
+`outcomes.py` answers two questions per merged pull request — was it reverted,
+did it break the default branch — and aggregates the answers per author.
+
+Both detectors are deliberately conservative. Revert matching prefers an
+explicit `#number` reference and falls back to subject matching; break
+attribution counts only the merge commit's own CI result, because blaming a
+merge for a later failure would attribute flaky infrastructure to whoever
+merged most recently. Under-counting failures is the safer error: it makes
+trust harder to earn, not easier.
+
+Scores use the lower bound of a 95% Wilson interval rather than the raw survival
+rate. One clean merge yields 20.7% confidence, twenty yields 83.9%, a hundred
+yields 96.3%. Without that, a single lucky merge reads as certainty and the
+mechanism becomes a way to launder luck into permission.
+
+Trust only widens `auto_merge_paths`, and only to patterns the policy names in
+`trust.trusted_auto_merge_paths`. It cannot unlock a protected path or relax CI,
+size, diff, or injection checks — `tests/test_outcomes.py` asserts each of those
+independently. It ships disabled.
+
 ## What this does not do
 
 - **It does not implement the issues `scan.py` files.** Wiring a coding agent to
   the `autonomous-loop` label is a separate, deliberate decision.
-- **It does not measure outcome quality.** Nothing tracks whether a merged
-  change was correct. Revert rate and post-merge CI breakage would close that
-  loop; they are the most valuable thing still missing.
+- **It cannot see a silent undo.** A rewrite that reverses a change without
+  saying "revert" does not register as a failure.
 - **It does not survive repository inactivity.** GitHub disables scheduled
   workflows after 60 days without activity and notifies no one.

@@ -1,0 +1,89 @@
+name: "Agent trust"
+
+# Measures whether merged changes survived and publishes a per-author
+# scoreboard. This is the only signal in the repository taken after a merge
+# rather than predicted before one.
+
+on:
+  schedule:
+    - cron: '0 6 * * 1'   # Mondays, 06:00 UTC
+  workflow_dispatch:
+    inputs:
+      days:
+        description: 'Window to analyse, in days'
+        type: string
+        default: '90'
+
+permissions:
+  contents: read
+  pull-requests: read
+  issues: write
+
+concurrency:
+  group: agent-trust
+  cancel-in-progress: false
+
+jobs:
+  measure:
+    name: "Measure outcomes"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r .github/scripts/requirements.txt
+
+      - name: Measure
+        id: measure
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/outcomes.py \
+            --repo "${{ github.repository }}" \
+            --days "${{ inputs.days || '90' }}"
+
+      - name: Publish the scoreboard
+        uses: actions/github-script@v7
+        env:
+          SCOREBOARD: ${{ steps.measure.outputs.scoreboard }}
+        with:
+          script: |
+            const { SCOREBOARD } = process.env;
+            const marker = '<!-- agent-trust-scoreboard -->';
+            const body = `## Agent trust\n\n${SCOREBOARD}\n\n${marker}\n`;
+
+            const open = await github.paginate(github.rest.issues.listForRepo, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'agent-trust',
+              per_page: 100,
+            });
+            const existing = open.find(i => (i.body || '').includes(marker));
+
+            if (existing) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: existing.number,
+                body,
+              });
+              core.info(`Updated scoreboard issue #${existing.number}`);
+            } else {
+              const { data } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: 'Agent trust scoreboard',
+                body,
+                labels: ['agent-trust'],
+              });
+              core.info(`Created scoreboard issue #${data.number}`);
+            }

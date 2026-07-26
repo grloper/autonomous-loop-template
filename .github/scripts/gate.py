@@ -67,15 +67,33 @@ class Decision:
     injection_signals: list = field(default_factory=list)
     protected_paths: list = field(default_factory=list)
     policy_warnings: list = field(default_factory=list)
+    trusted: bool = False
     summary: str = ""
 
 
-def evaluate(pol: policy_mod.Policy, pr: PullRequestFacts) -> Decision:
-    """Pure decision function. No I/O, no network, no GitHub objects."""
+def evaluate(pol: policy_mod.Policy, pr: PullRequestFacts,
+             trusted: frozenset = frozenset()) -> Decision:
+    """Pure decision function. No I/O, no network, no GitHub objects.
+
+    `trusted` is the set of author identities that outcomes.py has rated
+    `trusted`. It only ever widens the allowlist, and only for paths the policy
+    explicitly names in `trust.trusted_auto_merge_paths` — a good track record
+    never unlocks a protected path, and never relaxes any other check.
+    """
     d = Decision(policy_warnings=list(pol.warnings))
     d.is_agent, d.provenance_reason = policy_mod.looks_like_agent(
         pol, pr.actor, pr.branch, pr.title)
     profile = pol.profile_for(d.is_agent)
+
+    allowed_paths = list(profile.auto_merge_paths)
+    if pol.trust_enabled and pr.actor in trusted:
+        earned = list(pol.trust.get("trusted_auto_merge_paths") or [])
+        if earned:
+            allowed_paths += earned
+            d.trusted = True
+            d.provenance_reason += (
+                f"; rated trusted by measured outcomes, so "
+                f"{len(earned)} additional path pattern(s) may auto-merge")
 
     if pr.draft:
         d.summary = "Draft pull request — not reviewed."
@@ -97,7 +115,7 @@ def evaluate(pol: policy_mod.Policy, pr: PullRequestFacts) -> Decision:
         if pol.is_protected(f.filename):
             d.protected_paths.append(f.filename)
             d.blockers.append(f"`{f.filename}` is a protected path")
-        elif not policy_mod.match_any(f.filename, profile.auto_merge_paths):
+        elif not policy_mod.match_any(f.filename, allowed_paths):
             d.blockers.append(f"`{f.filename}` is outside the auto-merge allowlist")
 
         if f.patch is None or f.patch == "":
@@ -124,7 +142,7 @@ def evaluate(pol: policy_mod.Policy, pr: PullRequestFacts) -> Decision:
         d.blockers.append(f"{len(pr.files)} files changed (limit {profile.max_files})")
     if profile.max_lines and total_churn > profile.max_lines:
         d.blockers.append(f"{total_churn} lines changed (limit {profile.max_lines})")
-    if not profile.auto_merge_paths:
+    if not allowed_paths:
         d.blockers.append(
             f"the '{'agent' if d.is_agent else 'human'}' profile has auto-merge disabled")
 
@@ -247,6 +265,7 @@ def write_outputs(d: Decision, body: str) -> None:
         "verdict": d.verdict,
         "auto_merge": str(d.auto_merge).lower(),
         "is_agent": str(d.is_agent).lower(),
+        "trusted": str(d.trusted).lower(),
         "summary": d.summary,
         "body": body,
     }
@@ -270,10 +289,19 @@ def main() -> int:
         from github import Github
 
         pol = policy_mod.load_policy(args.root)
+        trusted: frozenset = frozenset()
+        if pol.trust_enabled:
+            import outcomes
+
+            ledger_path = Path(args.root) / pol.trust.get(
+                "ledger", ".github/agent-trust.json")
+            trusted = frozenset(outcomes.trusted_identities(
+                outcomes.load_ledger(ledger_path)))
+
         gh_repo = Github(os.environ["GITHUB_TOKEN"]).get_repo(args.repo)
         pr = gh_repo.get_pull(args.pr_number)
         facts = facts_from_github(gh_repo, pr)
-        decision = evaluate(pol, facts)
+        decision = evaluate(pol, facts, trusted)
         body = render(decision, facts)
     except Exception as exc:  # noqa: BLE001 - fail closed
         decision = Decision(

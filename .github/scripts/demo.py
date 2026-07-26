@@ -77,6 +77,19 @@ def scenarios() -> list:
     ]
 
 
+def trust_scenarios() -> list:
+    """The same pull request, decided twice: before and after earning trust."""
+    agent = dict(actor="copilot-swe-agent[bot]", branch="copilot/add-tests",
+                 ci_state="passing")
+    pr = PullRequestFacts(number=201, title="Add tests for the parser", **agent,
+                          files=[ChangedFile("tests/test_parser.py",
+                                             "+def test_empty(): assert parse('') == []", 1, 0)])
+    return [
+        ("new agent, no track record", False, pr, frozenset()),
+        ("same PR, agent rated trusted", True, pr, frozenset({agent["actor"]})),
+    ]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Demonstrate the merge gate.")
     parser.add_argument("--verbose", action="store_true", help="print full review bodies")
@@ -119,10 +132,35 @@ def main() -> int:
         for label, body in bodies:
             print(f"\n{BOLD}{'═' * 84}\n{label}\n{'═' * 84}{OFF}\n{body}")
 
+    # Earned autonomy, demonstrated on an identical pull request.
+    import copy
+
+    trust_pol = copy.deepcopy(pol)
+    trust_pol.trust = {**trust_pol.trust, "enabled": True,
+                       "trusted_auto_merge_paths": ["tests/**"]}
+    print(f"{BOLD}Earned autonomy{OFF} "
+          f"{DIM}(trust.enabled: true, trusted_auto_merge_paths: [tests/**]){OFF}")
+    print(f"{DIM}{'─' * 84}{OFF}")
+    total = len(bodies)
+    for label, expected, facts, trusted in trust_scenarios():
+        d = evaluate(trust_pol, facts, trusted)
+        total += 1
+        mark = f"{GREEN}yes{OFF}" if d.auto_merge else f"{DIM}no{OFF}"
+        flag = ""
+        if d.auto_merge != expected:
+            mismatches += 1
+            flag = f"  {RED}<- unexpected{OFF}"
+        colour = {"APPROVE": GREEN, "REQUEST_CHANGES": RED}.get(d.verdict, YELLOW)
+        print(f"{label:44} {'agent':7} {colour}{d.verdict:16}{OFF} {mark}{flag}")
+        reason = "trusted: tests/** is unlocked" if d.trusted else \
+            (d.blockers or ["—"])[0]
+        print(f"{DIM}{'':44} └─ {reason[:100]}{OFF}")
+    print()
+
     if mismatches:
         print(f"{RED}{mismatches} scenario(s) did not behave as documented.{OFF}\n")
         return 1
-    print(f"{GREEN}All {len(bodies)} scenarios behaved as documented.{OFF}\n")
+    print(f"{GREEN}All {total} scenarios behaved as documented.{OFF}\n")
     return 0
 
 

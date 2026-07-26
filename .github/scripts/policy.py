@@ -61,6 +61,17 @@ DEFAULT_POLICY = {
             "require_linked_issue": False,
         },
     },
+    # Earned autonomy. An identity rated `trusted` by outcomes.py may merge the
+    # additional paths listed here. Disabled by default: turning it on is a
+    # decision to let measured history widen what a machine can merge.
+    "trust": {
+        "enabled": False,
+        "ledger": ".github/agent-trust.json",
+        "min_sample": 20,      # merges required before any rating is given
+        "trusted": 0.95,       # Wilson lower bound needed to be 'trusted'
+        "watch": 0.80,         # below this an identity is 'untrusted'
+        "trusted_auto_merge_paths": [],
+    },
     # Matched against added and removed diff lines. `severity: block` produces
     # REQUEST_CHANGES; `warn` is reported but does not change the verdict.
     "diff_rules": [
@@ -135,11 +146,16 @@ class Policy:
     profiles: dict = field(default_factory=dict)
     diff_rules: list = field(default_factory=list)
     provenance: dict = field(default_factory=dict)
+    trust: dict = field(default_factory=dict)
     source: str = "built-in defaults"
     warnings: list = field(default_factory=list)
 
     def profile_for(self, is_agent: bool) -> Profile:
         return self.profiles["agent" if is_agent else "human"]
+
+    @property
+    def trust_enabled(self) -> bool:
+        return bool(self.trust.get("enabled"))
 
     def is_protected(self, path: str) -> bool:
         return match_any(path, self.protected_paths)
@@ -222,6 +238,7 @@ def load_policy(repo_root: Path | str = ".") -> Policy:
         profiles=profiles,
         diff_rules=rules,
         provenance=raw.get("provenance", {}),
+        trust=dict(raw.get("trust", {})),
         source=source,
         warnings=warnings,
     )

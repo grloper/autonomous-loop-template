@@ -19,6 +19,10 @@ python .github/scripts/scan.py --root ./services/api --dry-run
 # Diagnose a failed run
 python .github/scripts/doctor.py --repo owner/name --run-id 123456789
 
+# Measure which agents' merges actually survived
+python .github/scripts/outcomes.py --repo owner/name --days 90
+python .github/scripts/outcomes.py --repo owner/name --days 90 --write
+
 # Checks
 python -m unittest discover -s tests -v
 bash scripts/verify-setup.sh
@@ -35,6 +39,9 @@ what moved. Omitted keys keep their defaults.
 | `protected_paths` | Always a human, whoever wrote it. **The most valuable thing to customise.** |
 | `profiles.agent` / `profiles.human` | `auto_merge_paths`, `max_files`, `max_lines`, `require_ci`. |
 | `diff_rules` | `severity: block` → REQUEST_CHANGES; `warn` → blocks auto-merge only. |
+| `trust.enabled` | Earned autonomy. Off by default. |
+| `trust.min_sample` / `trusted` / `watch` | Merges required before rating, and the Wilson-bound thresholds for each verdict. |
+| `trust.trusted_auto_merge_paths` | Extra paths a `trusted` author may auto-merge. Never overrides `protected_paths`. |
 
 Scanner settings live in `.github/autonomous-loop.yml`: `max_issues_per_run`,
 `min_score`, `marker_weights`, `exclude_dirs`, `include_suffixes`, `escalations`.
@@ -67,3 +74,7 @@ Each corresponds to a defect that shipped once. `verify-setup.sh` enforces them.
 5. **`scan.py` excludes by path component.** A substring match on `.git` also
    excludes `.github`.
 6. **`contents: write` stays on the merge job only.**
+7. **Trust widens, never relaxes.** A good record must not unlock a protected
+   path or bypass CI, size, diff, or injection checks.
+8. **Trust scores use the Wilson lower bound.** Switching to the raw rate would
+   let a single clean merge read as 100% reliable.

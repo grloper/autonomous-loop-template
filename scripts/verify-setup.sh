@@ -23,6 +23,7 @@ for f in \
   ".github/scripts/doctor.py" \
   ".github/scripts/policy.py" \
   ".github/scripts/injection.py" \
+  ".github/scripts/outcomes.py" \
   ".github/scripts/requirements.txt"
 do
   [[ -f "$f" ]] && ok "$f" || bad "$f is missing"
@@ -82,7 +83,14 @@ else
   ok "no PR/issue text is interpolated directly into script bodies"
 fi
 
-# 6. The scanner must exclude by path component, not substring.
+# 6. Trust must never be enabled by default — that would widen merging silently.
+if python3 -c 'import sys; sys.path.insert(0,".github/scripts"); import policy; sys.exit(0 if not policy.load_policy(".").trust_enabled else 1)' 2>/dev/null; then
+  ok "earned autonomy is opt-in (trust.enabled is false)"
+else
+  warn "trust.enabled is true — trusted authors can auto-merge trusted_auto_merge_paths"
+fi
+
+# 7. The scanner must exclude by path component, not substring.
 if grep -q "'.git' in str(" .github/scripts/scan.py 2>/dev/null; then
   bad "scan.py excludes by substring — '.git' also matches '.github', hiding that tree"
 else
