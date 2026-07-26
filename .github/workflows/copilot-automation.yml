@@ -1,129 +1,57 @@
-name: "🤖 Copilot Auto-Assign & Auto-Review"
+name: "Auto-Review Pull Requests"
+
+# SECURITY NOTES — read before editing this file.
+#
+# 1. This workflow decides whether a PR may merge. It must therefore never
+#    execute code that comes from the pull request itself. The checkout below
+#    pins to `base.sha` (the trusted target branch), not to the PR head. With a
+#    head checkout, a PR could rewrite auto_reviewer.py and approve itself.
+#
+# 2. Values controlled by a PR author (title, body, branch name) are passed to
+#    scripts through `env:`, never interpolated into a `${{ }}` expression
+#    inside a script body. Direct interpolation allows script injection via a
+#    crafted PR title.
+#
+# 3. Actions are referenced by major-version tag. For a workflow holding
+#    `contents: write`, pinning each action to a full commit SHA is stronger —
+#    tag rewrites have been used to compromise Actions consumers in the past.
 
 on:
-  issues:
-    types: [opened, labeled]
   pull_request:
-    types: [opened, synchronize, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review]
 
 permissions:
-  contents: write
-  issues: write
+  contents: read
   pull-requests: write
-  actions: read
+
+concurrency:
+  group: auto-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 
 jobs:
-  auto-assign-copilot:
-    name: "🤖 Auto-Assign Copilot to Issue"
-    if: github.event_name == 'issues'
+  auto-review:
+    name: "Review pull request"
+    if: github.event.pull_request.draft == false
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 10
+
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-      
-      - name: 🤖 Assign Copilot to Issue
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const issue_number = context.issue.number;
-            const labels = context.payload.issue.labels.map(l => l.name);
-            
-            // Add comment to trigger Copilot
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue_number,
-              body: `🤖 **GitHub Copilot Auto-Assigned**
-              
-              @copilot I've been assigned to this issue. Let me analyze it and create a fix.
-              
-              **Issue Type**: ${labels.join(', ')}
-              **Priority**: ${labels.includes('workflow-failure') ? '🔴 HIGH' : '🟡 MEDIUM'}
-              
-              I'll:
-              1. Analyze the problem
-              2. Research the best solution
-              3. Create a pull request with the fix
-              4. Request review from the auto-reviewer
-              
-              _Estimated time: 2-5 minutes_`
-            });
-            
-            // Add "copilot-assigned" label
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issue_number,
-              labels: ['copilot-assigned', 'in-progress']
-            });
-            
-            console.log(`✅ Copilot assigned to issue #${issue_number}`);
-  
-  auto-review-pr:
-    name: "🔍 Auto-Review Pull Request"
-    if: github.event_name == 'pull_request' && github.event.pull_request.draft == false
-    runs-on: ubuntu-latest
-    
-    steps:
-      - name: 📥 Checkout PR
+      - name: Check out trusted base commit
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.pull_request.head.ref }}
-          fetch-depth: 0
-      
-      - name: 🐍 Setup Python
+          # Never the PR head: the reviewer must not be code the PR supplied.
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
-      - name: 📦 Install Dependencies
-        run: |
-          pip install PyGithub requests pyyaml
-      
-      - name: 🏷️ Auto-Label PR
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const pr = context.payload.pull_request;
-            const labels_to_add = [];
-            
-            // Check PR title/body for keywords
-            const title = pr.title.toLowerCase();
-            const body = (pr.body || '').toLowerCase();
-            const text = title + ' ' + body;
-            
-            // Auto-label based on content
-            if (text.includes('fix') || text.includes('bug')) {
-              labels_to_add.push('bug-fix');
-            }
-            if (text.includes('workflow') || text.includes('ci') || text.includes('action')) {
-              labels_to_add.push('workflow');
-            }
-            if (text.includes('docs') || text.includes('documentation') || text.includes('readme')) {
-              labels_to_add.push('documentation');
-            }
-            if (text.includes('automated') || text.includes('auto-fix')) {
-              labels_to_add.push('automated-fix');
-            }
-            
-            // Check if PR is from a branch with "auto-fix" or "copilot" in name
-            const branch = pr.head.ref.toLowerCase();
-            if (branch.includes('auto-fix') || branch.includes('copilot') || branch.includes('fix')) {
-              labels_to_add.push('automated-fix');
-            }
-            
-            if (labels_to_add.length > 0) {
-              await github.rest.issues.addLabels({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: pr.number,
-                labels: labels_to_add
-              });
-              console.log(`Added labels: ${labels_to_add.join(', ')}`);
-            }
-      
-      - name: 🔍 Analyze PR Changes
+
+      - name: Install dependencies
+        run: pip install -r .github/scripts/requirements.txt
+
+      - name: Analyze pull request
         id: analyze
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -131,139 +59,82 @@ jobs:
           python .github/scripts/auto_reviewer.py \
             --repo "${{ github.repository }}" \
             --pr-number "${{ github.event.pull_request.number }}"
-      
-      - name: ✅ Auto-Approve (if safe)
-        if: steps.analyze.outputs.verdict == 'APPROVE'
+
+      - name: Post review
         uses: actions/github-script@v7
+        env:
+          VERDICT: ${{ steps.analyze.outputs.verdict }}
+          SUMMARY: ${{ steps.analyze.outputs.summary }}
+          BLOCKERS: ${{ steps.analyze.outputs.blockers }}
+          CONCERNS: ${{ steps.analyze.outputs.concerns }}
+          CRITICAL_FILES: ${{ steps.analyze.outputs.critical_files }}
         with:
           script: |
+            // All PR-controlled and script-produced values arrive via env, so
+            // nothing here is interpolated into the script text itself.
+            const { VERDICT, SUMMARY, BLOCKERS, CONCERNS, CRITICAL_FILES } = process.env;
+
+            const sections = [`**Auto-review: ${VERDICT}**`, '', SUMMARY, ''];
+            if (CONCERNS && CONCERNS !== 'None') {
+              sections.push('### Findings in the diff', CONCERNS, '');
+            }
+            if (BLOCKERS && BLOCKERS !== 'None') {
+              sections.push('### Why this will not auto-merge', BLOCKERS, '');
+            }
+            if (CRITICAL_FILES && CRITICAL_FILES !== 'None') {
+              sections.push('### Critical files touched', CRITICAL_FILES, '');
+            }
+            sections.push('---', '_Posted by the auto-reviewer._');
+
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'APPROVE',
-              body: `🤖 **Auto-Review: APPROVED**
-              
-              ✅ All safety checks passed
-              ✅ No critical files modified
-              ✅ Changes align with issue description
-              ✅ Code quality standards met
-              
-              **Analysis Summary:**
-              ${{ steps.analyze.outputs.summary }}
-              
-              **Auto-merging in 30 seconds...**
-              
-              _If you want to review manually, disable auto-merge with: \`@github-copilot pause auto-merge\`_`
+              pull_number: context.payload.pull_request.number,
+              event: VERDICT === 'APPROVE' ? 'APPROVE'
+                   : VERDICT === 'REQUEST_CHANGES' ? 'REQUEST_CHANGES'
+                   : 'COMMENT',
+              body: sections.join('\n'),
             });
-      
-      - name: 🔄 Auto-Merge (if approved)
-        if: steps.analyze.outputs.verdict == 'APPROVE' && steps.analyze.outputs.auto_merge == 'true'
+
+      # Auto-merge runs in a separate job so that the only step holding
+      # `contents: write` is the merge itself, gated on an APPROVE verdict.
+    outputs:
+      verdict: ${{ steps.analyze.outputs.verdict }}
+      auto_merge: ${{ steps.analyze.outputs.auto_merge }}
+
+  auto-merge:
+    name: "Merge approved documentation change"
+    needs: auto-review
+    if: needs.auto-review.outputs.auto_merge == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Enable auto-merge
         uses: actions/github-script@v7
         with:
           script: |
-            // Wait 30 seconds for human override
-            await new Promise(resolve => setTimeout(resolve, 30000));
-            
+            // GitHub's native auto-merge honours branch protection and required
+            // checks. The previous version slept 30 seconds on a billed runner
+            // as a "human override window" and then force-merged regardless.
+            const pr = context.payload.pull_request;
             try {
-              // Enable auto-merge
               await github.rest.pulls.merge({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                pull_number: context.issue.number,
+                pull_number: pr.number,
                 merge_method: 'squash',
-                commit_title: `${{ github.event.pull_request.title }} (#${{ github.event.pull_request.number }})`,
-                commit_message: 'Auto-merged by Copilot Auto-Reviewer'
               });
-              
-              console.log('✅ PR auto-merged successfully');
-              
-              // Close related issue if exists
-              const issue_numbers = context.payload.pull_request.body.match(/#(\d+)/g);
-              if (issue_numbers) {
-                for (const issue_ref of issue_numbers) {
-                  const issue_number = parseInt(issue_ref.replace('#', ''));
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue_number,
-                    body: `✅ Fixed by PR #${{ github.event.pull_request.number }} (auto-merged)`
-                  });
-                  await github.rest.issues.update({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue_number,
-                    state: 'closed',
-                    labels: ['completed', 'auto-fixed']
-                  });
-                }
-              }
+              core.info(`Merged PR #${pr.number}`);
             } catch (error) {
-              console.log('⚠️ Auto-merge failed:', error.message);
+              core.warning(`Auto-merge failed: ${error.message}`);
               await github.rest.issues.createComment({
                 owner: context.repo.owner,
                 repo: context.repo.repo,
-                issue_number: context.issue.number,
-                body: `⚠️ Auto-merge failed. Manual merge required.\n\nError: ${error.message}`
+                issue_number: pr.number,
+                body: `Auto-merge did not complete: ${error.message}\n\nThis PR needs a manual merge.`,
               });
             }
-      
-      - name: ❌ Request Changes (if unsafe)
-        if: steps.analyze.outputs.verdict == 'REQUEST_CHANGES'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'REQUEST_CHANGES',
-              body: `🤖 **Auto-Review: CHANGES REQUESTED**
-              
-              ⚠️ Safety concerns detected
-              
-              **Issues Found:**
-              ${{ steps.analyze.outputs.issues }}
-              
-              **Required Changes:**
-              ${{ steps.analyze.outputs.required_changes }}
-              
-              Please address these concerns before merging.
-              
-              _Tag @copilot to regenerate the fix_`
-            });
-      
-      - name: 💬 Comment (if needs human review)
-        if: steps.analyze.outputs.verdict == 'COMMENT'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            await github.rest.pulls.createReview({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: context.issue.number,
-              event: 'COMMENT',
-              body: `🤖 **Auto-Review: MANUAL REVIEW REQUIRED**
-              
-              ⚠️ This PR modifies critical files or requires human judgment
-              
-              **Analysis:**
-              ${{ steps.analyze.outputs.summary }}
-              
-              **Critical Files Modified:**
-              ${{ steps.analyze.outputs.critical_files }}
-              
-              Please review carefully before merging.`
-            });
-      
-      - name: 📊 Generate Summary
-        if: always()
-        run: |
-          echo "## 🤖 Auto-Reviewer Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**PR**: #${{ github.event.pull_request.number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Verdict**: ${{ steps.analyze.outputs.verdict }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Auto-Merge**: ${{ steps.analyze.outputs.auto_merge }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Summary" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.analyze.outputs.summary }}" >> $GITHUB_STEP_SUMMARY

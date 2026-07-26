@@ -1,137 +1,103 @@
-name: Workflow Doctor - Auto-Fix Failures
+name: "Workflow Doctor - diagnose failed runs"
 
 on:
   workflow_run:
-    workflows: 
-      - "🎯 Orchestrator - Autonomous Project Lead"
-      - "🤖 Copilot Auto-Assign & Auto-Review"
-    types: 
-      - completed
+    workflows:
+      - "Orchestrator - scan repository and file issues"
+      - "Auto-Review Pull Requests"
+    types: [completed]
   workflow_dispatch:
     inputs:
       run_id:
-        description: 'Workflow run ID to diagnose (optional - will use latest failure)'
-        required: false
+        description: 'Workflow run ID to diagnose'
+        required: true
         type: string
 
+# The doctor reads run logs and files an issue. It does not edit workflow
+# files, so it does not need `contents: write`.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
   issues: write
   actions: read
 
 jobs:
-  diagnose-and-fix:
-    # Only run if workflow ACTUALLY failed (not action_required from draft PRs)
-    if: |
-      (github.event.workflow_run.conclusion == 'failure' || github.event_name == 'workflow_dispatch') &&
-      github.event.workflow_run.conclusion != 'action_required'
+  diagnose:
+    name: "Diagnose failure"
+    # `action_required` is the normal state for a run awaiting approval (for
+    # example a first-time contributor's PR). It is not a failure.
+    if: >
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'failure'
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 10
+
     steps:
-      - name: Checkout code
+      - name: Check out repository
         uses: actions/checkout@v4
-      
-      - name: Setup Python
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
+
       - name: Install dependencies
-        run: |
-          pip install PyGithub requests pyyaml
-      
-      - name: Run Workflow Doctor
+        run: pip install -r .github/scripts/requirements.txt
+
+      - name: Diagnose the failed run
         id: doctor
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || 'manual' }}
         run: |
           python .github/scripts/workflow_doctor.py \
             --repo "${{ github.repository }}" \
-            --run-id "${{ github.event.workflow_run.id || inputs.run_id }}" \
-            --workflow-name "${{ github.event.workflow_run.name }}"
-      
-      - name: Create Fix PR (if auto-fix available)
-        if: steps.doctor.outputs.auto_fix_available == 'true'
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          # Configure git
-          git config user.name "Workflow Doctor Bot"
-          git config user.email "workflow-doctor@github.com"
-          
-          # Create fix branch
-          BRANCH_NAME="auto-fix/workflow-$(date +%s)"
-          git checkout -b "$BRANCH_NAME"
-          
-          # Apply fixes (already done by workflow_doctor.py)
-          git add .
-          git commit -m "fix: Auto-fix workflow failure - ${{ steps.doctor.outputs.issue_type }}"
-          
-          # Push and create PR
-          git push origin "$BRANCH_NAME"
-          
-          gh pr create \
-            --title "🤖 Auto-Fix: ${{ steps.doctor.outputs.issue_type }}" \
-            --body "${{ steps.doctor.outputs.pr_body }}" \
-            --label "automated-fix,workflow-doctor" \
-            --base main \
-            --head "$BRANCH_NAME"
-      
-      - name: Create Issue (if manual review needed)
-        if: steps.doctor.outputs.auto_fix_available == 'false' || failure()
+            --run-id "$RUN_ID" \
+            --workflow-name "$WORKFLOW_NAME"
+
+      - name: File or update the diagnosis issue
         uses: actions/github-script@v7
+        env:
+          # Passed through env so a workflow name or log excerpt can never be
+          # interpreted as part of this script.
+          REPORT: ${{ steps.doctor.outputs.report }}
+          TITLE: ${{ steps.doctor.outputs.title }}
+          ISSUE_TYPE: ${{ steps.doctor.outputs.issue_type }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name || 'manual' }}
         with:
           script: |
-            const diagnosis = `${{ steps.doctor.outputs.diagnosis }}` || 'Workflow Doctor analysis in progress...';
-            const recommendations = `${{ steps.doctor.outputs.recommendations }}` || 'Review workflow logs manually';
-            
-            github.rest.issues.create({
+            const { REPORT, TITLE, ISSUE_TYPE, WORKFLOW_NAME } = process.env;
+
+            // One open issue per (workflow, failure type). Repeated failures
+            // add a comment rather than filing a new issue every time, which
+            // is what turns a broken schedule into hundreds of duplicates.
+            const marker = `<!-- workflow-doctor:${WORKFLOW_NAME}:${ISSUE_TYPE} -->`;
+            const existing = await github.paginate(github.rest.issues.listForRepo, {
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `🔧 Workflow Failure: ${{ github.event.workflow_run.name || 'Unknown Workflow' }}`,
-              body: `## Workflow Doctor Diagnosis
-              
-              **Workflow**: ${{ github.event.workflow_run.name || 'Unknown' }}
-              **Run ID**: ${{ github.event.workflow_run.id || inputs.run_id || 'Unknown' }}
-              **Run URL**: ${{ github.event.workflow_run.html_url || 'N/A' }}
-              **Conclusion**: ${{ github.event.workflow_run.conclusion || 'failure' }}
-              
-              ## Diagnosis
-              ${diagnosis}
-              
-              ## Recommendations
-              ${recommendations}
-              
-              ## Next Steps
-              - Review the failed workflow logs at the URL above
-              - Check for deprecated actions (upgrade to v4)
-              - Verify workflow syntax
-              - Test fixes in a separate branch
-              
-              ## Common Fixes
-              - **Deprecated actions**: Update \`actions/upload-artifact@v3\` to \`@v4\`
-              - **Permissions**: Add proper \`permissions:\` block
-              - **Dependencies**: Check \`requirements.txt\` is complete
-              
-              ---
-              _Auto-generated by Workflow Doctor 🏥_`,
-              labels: ['workflow-failure', 'needs-review', 'automated-diagnosis']
+              state: 'open',
+              labels: 'workflow-failure',
+              per_page: 100,
             });
-      
-      - name: Generate Summary
-        run: |
-          echo "## 🏥 Workflow Doctor Report" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Failed Workflow**: ${{ github.event.workflow_run.name }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Run ID**: ${{ github.event.workflow_run.id }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Auto-fix Available**: ${{ steps.doctor.outputs.auto_fix_available }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Diagnosis" >> $GITHUB_STEP_SUMMARY
-          echo "${{ steps.doctor.outputs.diagnosis }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          if [ "${{ steps.doctor.outputs.auto_fix_available }}" == "true" ]; then
-            echo "✅ **Auto-fix applied** - PR created with recommended changes" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ **Manual review required** - Issue created for human intervention" >> $GITHUB_STEP_SUMMARY
-          fi
+            const match = existing.find(i => (i.body || '').includes(marker));
+
+            if (match) {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: match.number,
+                body: `This failure occurred again.\n\n${REPORT}`,
+              });
+              core.info(`Updated existing issue #${match.number}`);
+            } else {
+              const { data } = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: TITLE.slice(0, 250),
+                body: `${REPORT}\n${marker}\n`,
+                labels: ['workflow-failure', 'autonomous-loop'],
+              });
+              core.info(`Filed issue #${data.number}`);
+            }

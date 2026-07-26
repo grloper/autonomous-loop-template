@@ -1,247 +1,72 @@
-# 🚀 Autonomous Loop - Quick Reference
+# Quick reference
 
-## ⚡ One-Line Commands
+For what each component does and why it is built this way, see
+[`.github/ARCHITECTURE.md`](.github/ARCHITECTURE.md).
 
-```bash
-# Install in any repo
-curl -sL https://raw.githubusercontent.com/grloper/gel-nails-machine/main/scripts/install-autonomous-loop.sh | bash
-
-# Trigger orchestrator
-gh workflow run orchestrator.yml
-
-# Check status
-gh run list --workflow=orchestrator.yml --limit 5
-
-# View latest report
-gh run view $(gh run list --workflow=orchestrator.yml --json databaseId --jq '.[0].databaseId' --limit 1)
-
-# List AI-assigned issues
-gh issue list --label "copilot-assigned"
-
-# Manual PR merge
-gh workflow run manual-pr-review.yml -f pr_number=42 -f action=approve-and-merge
-```
-
----
-
-## 🎯 The Flow (What Happens)
-
-```
-YOU              SYSTEM                       RESULT
-─────────────────────────────────────────────────────────────
-                                              
-Press            Orchestrator runs      →     3-5 issues created
-"THE BUTTON"     (20 seconds)                 with priorities
-                                              
-                 ↓                             
-                                              
-                 Copilot auto-assigned  →     @copilot tagged
-                 (immediate)                   on each issue
-                                              
-                 ↓                             
-                                              
-                 Coding agent starts    →     [WIP] PR created
-                 (2-5 minutes)                 with implementation plan
-                                              
-                 ↓                             
-                                              
-                 Code implemented       →     PR updated
-                 (10-30 minutes)               status: Ready for review
-                                              
-                 ↓                             
-                                              
-                 Auto-reviewer checks   →     Decision:
-                 (5 seconds)                   • Safe → AUTO-MERGE (30s)
-                                              • Code → APPROVE (you merge)
-                                              • Risky → COMMENT (you review)
-                                              
-                 ↓                             
-                                              
-You click        PR merged             →     Issue auto-closed
-"Merge"          (if needed)                   ✅ Task complete
-(optional)                                    
-                                              
-                 ↓                             
-                                              
-                 Loop restarts         →     Finds next work
-                 (Monday 8am or manual)        ♻️  Forever
-```
-
----
-
-## 📁 File Structure
-
-```
-.github/
-├── workflows/                          # GitHub Actions
-│   ├── orchestrator.yml               # 🎯 Brain (main loop)
-│   ├── copilot-automation.yml         # 🤖 Auto-assign + review
-│   ├── workflow-doctor.yml            # 🏥 Self-healing
-│   └── manual-pr-review.yml           # ⚙️  Manual controls
-│
-├── scripts/                            # Python automation
-│   ├── orchestrator.py                # Analysis engine
-│   ├── auto_reviewer.py               # PR safety validator
-│   └── workflow_doctor.py             # Failure diagnostics
-│
-├── copilot-instructions.md            # ⚠️  CUSTOMIZE THIS!
-└── PR-REVIEW-FLOW.md                  # Documentation
-```
-
----
-
-## ⚙️ Key Files to Customize
-
-### 1. **`.github/copilot-instructions.md`** ← START HERE
-Your project context for AI. Defines:
-- Tech stack
-- Architecture patterns
-- Critical files
-- Safety rules
-
-### 2. **`orchestrator.py` (lines 45-70)**
-What to scan for:
-```python
-PRIORITY_PATTERNS = {
-    'security': [r'TODO.*security', ...],
-    'performance': [r'TODO.*optimize', ...],
-    # Add your patterns
-}
-```
-
-### 3. **`auto_reviewer.py` (lines 20-50)**
-Critical files that need human review:
-```python
-CRITICAL_FILES = {
-    'src/auth/': ['authentication'],
-    'src/payments/': ['payment processing'],
-    # Add your paths
-}
-```
-
----
-
-## 🎛️ Automation Levels
-
-| Level | Auto-Merge | Auto-Approve | Use Case |
-|-------|------------|--------------|----------|
-| **Observer** | ❌ | ❌ | Just learning, want full control |
-| **Assistant** | Docs only | ✅ | Most teams (recommended) |
-| **Autonomous** | ✅ | ✅ | Mature teams, high confidence |
-
-Configure in `.github/workflows/copilot-automation.yml`
-
----
-
-## 🔧 Common Customizations
-
-### Add New Scan Pattern
-```python
-# orchestrator.py
-PRIORITY_PATTERNS['api'] = [
-    r'TODO.*endpoint',
-    r'FIXME.*API',
-    r'# Missing rate limit',
-]
-```
-
-### Change Auto-Merge Threshold
-```python
-# auto_reviewer.py
-SAFETY_THRESHOLDS = {
-    'max_files_for_auto_merge': 5,    # Default: 3
-    'max_lines_changed': 150,          # Default: 100
-}
-```
-
-### Add Custom Priority Logic
-```python
-# orchestrator.py - calculate_priority()
-if 'payment' in task['category']:
-    return {'urgency': 10, 'impact': 10, 'risk': 9}
-```
-
-### Exclude Directories from Scanning
-```python
-# orchestrator.py
-EXCLUDE_DIRS = [
-    'node_modules/',
-    'venv/',
-    'dist/',
-    'build/',
-    '__pycache__/',
-    # Add yours
-]
-```
-
----
-
-## 🐛 Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| **Orchestrator doesn't create issues** | Lower `MIN_PRIORITY_SCORE` in orchestrator.py |
-| **Copilot doesn't create PRs** | Check `@copilot` mention in issue, verify Copilot access |
-| **PRs not auto-merging** | Check if file is in CRITICAL_FILES, or reduce thresholds |
-| **Too many issues created** | Raise `MIN_PRIORITY_SCORE` or adjust PRIORITY_PATTERNS |
-| **Workflow Doctor spamming** | Fix root cause workflow failure, or disable self-healing temporarily |
-
----
-
-## 📊 Metrics to Track
+## Commands
 
 ```bash
-# Weekly summary
-gh run list --workflow=orchestrator.yml --limit 4  # Last month of runs
+# See what the scanner would file, without filing anything
+python .github/scripts/orchestrator.py --dry-run
 
-# Issues resolved
-gh issue list --state closed --label "copilot-assigned" --json closedAt,title
+# Scan a subdirectory
+python .github/scripts/orchestrator.py --root ./services/api --dry-run
 
-# PR stats
-gh pr list --state merged --label "automated-fix" --json mergedAt,additions,deletions
+# File issues (needs GITHUB_TOKEN and GITHUB_REPOSITORY)
+python .github/scripts/orchestrator.py --max-issues 3
 
-# Automation rate
-echo "Auto-merged: $(gh pr list --search 'Auto-merged' --state merged | wc -l)"
-echo "Total PRs: $(gh pr list --state merged | wc -l)"
+# Review a specific PR
+python .github/scripts/auto_reviewer.py --repo owner/name --pr-number 42
+
+# Diagnose a failed run
+python .github/scripts/workflow_doctor.py --repo owner/name --run-id 123456789
+
+# Trigger from the CLI
+gh workflow run orchestrator.yml -f dry_run=true
+gh workflow run manual-pr-review.yml -f pr_number=42 -f action=approve-only
 ```
 
----
+## Configuration
 
-## 🎮 Pro Tips
+`.github/autonomous-loop.yml`, all keys optional:
 
-1. **Start Conservative**: Use Observer mode first week, increase gradually
-2. **Customize copilot-instructions.md**: Better context = better PRs
-3. **Review Auto-Reviewer Decisions**: Check why PRs were/weren't auto-merged
-4. **Use Labels**: Add custom labels to issues for better organization
-5. **Monitor Trends**: Track which types of tasks the system finds most
-6. **Iterate on Patterns**: Refine PRIORITY_PATTERNS based on what's useful
-7. **Set Critical Files Correctly**: Balance safety vs automation
+| Key | Default | Effect |
+|---|---|---|
+| `max_issues_per_run` | `5` | Cap on issues filed per run. Excess findings wait for the next run. |
+| `min_score` | `3.0` | Findings scoring below this are dropped. |
+| `marker_weights` | see script | `KEYWORD: [impact, urgency, risk]`; score is `impact × urgency ÷ risk`. |
+| `exclude_dirs` | `.git`, `node_modules`, … | Matched against path components, not substrings. |
+| `include_suffixes` | `.py`, `.ts`, `.go`, … | Only these file types are scanned. |
+| `escalations` | see script | Regex → multiplier, applied when it matches the marker's line. |
 
----
+Merge-gate thresholds live in `.github/scripts/auto_reviewer.py`:
+`CRITICAL_PATH_GLOBS`, `AUTO_MERGE_GLOBS`, `DANGEROUS_DIFF_PATTERNS`,
+`MAX_AUTO_MERGE_FILES`, `MAX_AUTO_MERGE_LINES`.
 
-## 🔗 Resources
+## Troubleshooting
 
-- **Full Guide**: [AUTONOMOUS-LOOP-SETUP.md](./AUTONOMOUS-LOOP-SETUP.md)
-- **PR Flow**: [PR-REVIEW-FLOW.md](./.github/PR-REVIEW-FLOW.md)
-- **Example Repo**: [gel-nails-machine](https://github.com/grloper/gel-nails-machine)
-- **Issues/Support**: [GitHub Issues](https://github.com/grloper/gel-nails-machine/issues)
+| Symptom | Cause and fix |
+|---|---|
+| Scheduled runs stopped appearing | GitHub disables `schedule:` after 60 days of repository inactivity, silently. Re-enable on the Actions tab. |
+| No issues filed | Run with `--dry-run`. Findings below `min_score` are dropped, and duplicates of open issues are skipped by design. |
+| Scanner misses a directory | Check `include_suffixes` covers the file type and `exclude_dirs` does not name a parent directory. |
+| A marker is not detected | Markers only count inside comments, so a keyword in a string literal is ignored on purpose. |
+| Nothing ever auto-merges | Intentional unless the PR is documentation-only, small, clean, and CI is green. Read the "why this will not auto-merge" list in the review comment. |
+| Reviewer says "diff unavailable" | The file is binary or too large for the API to return a patch, so it cannot be inspected and will not auto-merge. |
+| Reviewer errored | It fails closed and requests human review. The error appears in the review comment and the step log. |
+| Doctor says `logs_unavailable` | Logs expired, or the workflow lacks `actions: read`. |
+| Duplicate issues | Should not happen — issues carry a fingerprint marker. If it does, the marker was edited out of the issue body. |
 
----
+## Safety properties to preserve when editing
 
-## 💡 Quick Wins (First Week)
+These are load-bearing. Changing any of them re-opens a defect that was fixed:
 
-1. ✅ Install system
-2. ✅ Customize copilot-instructions.md
-3. ✅ Run orchestrator once manually
-4. ✅ Review 1-2 PRs to understand flow
-5. ✅ Adjust one threshold based on results
-6. ✅ Let it run automatically for a week
-7. ✅ Measure time saved vs week before
-
-**Goal**: Save 5+ hours/week within 2 weeks
-
----
-
-**Your repo is now self-managing! 🚀**
-
-Next: `gh workflow run orchestrator.yml`
+1. **The reviewer checks out `base.sha`, never the PR head.** A head checkout
+   lets a pull request modify `auto_reviewer.py` and approve itself.
+2. **PR-controlled text reaches scripts through `env:`**, never `${{ }}`
+   interpolation inside a script body, which allows injection via a PR title.
+3. **The reviewer fails closed.** Every error path sets `auto_merge` to false.
+4. **The doctor never writes to `.github/workflows/`.** Round-tripping workflow
+   YAML through a parser turns `on:` into `true:` and disables the workflow.
+5. **`exclude_dirs` matches path components.** A substring match on `.git` also
+   excludes `.github`, which silently hides that whole tree from the scanner.

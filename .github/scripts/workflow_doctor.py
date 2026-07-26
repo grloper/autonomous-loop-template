@@ -1,395 +1,269 @@
 #!/usr/bin/env python3
 """
-Workflow Doctor - Automated Workflow Failure Diagnosis and Repair
+Workflow Doctor - diagnoses failed GitHub Actions runs.
 
-This script analyzes GitHub Actions workflow failures and attempts to automatically
-fix common issues like missing permissions, syntax errors, and configuration problems.
+This tool reads the real log text of a failed run, matches it against known
+failure signatures, and reports a diagnosis with concrete remediation steps.
+
+It deliberately does NOT edit workflow files. The previous version rewrote them
+with `yaml.safe_load` followed by `yaml.dump`, which silently converted the
+`on:` trigger key to `true:` (YAML 1.1 treats `on` as a boolean) and stripped
+every comment. That "repair" left the workflow permanently un-runnable. A
+diagnosis a human can act on is worth more than an edit that destroys the file.
 """
 
-import os
-import sys
-import json
-import re
-import yaml
 import argparse
-from typing import Dict, List, Tuple, Optional
-from github import Github
-from pathlib import Path
+import io
+import os
+import re
+import sys
+import zipfile
+
+# Signature -> (label, whether a human must change repo settings, guidance).
+FAILURE_SIGNATURES = [
+    (
+        r"Resource not accessible by integration|"
+        r"403.*(?:permission|forbidden)|"
+        r"x-accepted-github-permissions",
+        "permissions",
+        "The workflow's GITHUB_TOKEN lacks a scope it needs.",
+        [
+            "Add the missing scope to the workflow's `permissions:` block.",
+            "Grant only what the job needs (for example `issues: write`).",
+            "Check Settings > Actions > General > Workflow permissions is not read-only.",
+            "Do not use `permissions: write-all`.",
+        ],
+    ),
+    (
+        r"ModuleNotFoundError|No module named|cannot import name|"
+        r"npm ERR!.*(?:404|ENOENT)|Could not find a version that satisfies",
+        "dependency",
+        "A dependency the job imports is not installed in the runner.",
+        [
+            "Confirm the package is listed in requirements.txt / package.json.",
+            "Confirm the workflow installs it before use.",
+            "Pin the version so the runner and local environments agree.",
+        ],
+    ),
+    (
+        r"Invalid workflow file|yaml.*(?:syntax|parse) error|"
+        r"mapping values are not allowed|did not find expected key",
+        "syntax",
+        "The workflow YAML is invalid, so the run never started properly.",
+        [
+            "Validate the file with `actionlint` or a YAML linter.",
+            "Check indentation and quoting around `${{ }}` expressions.",
+            "If a tool rewrote this file, check whether `on:` became `true:`.",
+        ],
+    ),
+    (
+        r"(?:Secret|secrets\.\w+).*not found|"
+        r"Input required and not supplied|"
+        r"Bad credentials|401 Unauthorized",
+        "missing_secret",
+        "A required secret or credential is missing or invalid.",
+        [
+            "Add the secret under Settings > Secrets and variables > Actions.",
+            "Confirm the name matches exactly, including case.",
+            "Secrets are not exposed to workflows triggered from forks.",
+        ],
+    ),
+    (
+        r"exceeded the maximum execution time|"
+        r"The operation was canceled|The job running on runner .* has exceeded",
+        "timeout",
+        "The job ran past its time limit and was cancelled.",
+        [
+            "Set an explicit `timeout-minutes:` on the job.",
+            "Cache dependencies to cut setup time.",
+            "Split long jobs so a failure surfaces sooner.",
+        ],
+    ),
+    (
+        r"no space left on device|ENOSPC",
+        "disk_space",
+        "The runner ran out of disk space.",
+        [
+            "Remove build artifacts and caches before the failing step.",
+            "Use `docker system prune -af` on container-heavy jobs.",
+        ],
+    ),
+    (
+        r"rate limit exceeded|API rate limit|429 Too Many Requests",
+        "rate_limit",
+        "A GitHub or third-party API rate limit was hit.",
+        [
+            "Batch API calls or add backoff between them.",
+            "Reduce how often the workflow runs on a schedule.",
+        ],
+    ),
+]
 
 
-class WorkflowDoctor:
-    """Diagnose and fix GitHub Actions workflow failures"""
-    
-    # Common failure patterns and their fixes
-    FAILURE_PATTERNS = {
-        'permissions': {
-            'patterns': [
-                r'Resource not accessible by integration',
-                r'403.*permissions',
-                r'x-accepted-github-permissions.*issues=write',
-                r'x-accepted-github-permissions.*pull_requests=write',
-            ],
-            'auto_fixable': True,
-            'fix_function': 'fix_permissions_issue'
-        },
-        'syntax': {
-            'patterns': [
-                r'Invalid workflow file',
-                r'yaml.*syntax error',
-                r'unexpected token',
-                r'mapping values are not allowed',
-            ],
-            'auto_fixable': False,
-            'fix_function': None
-        },
-        'missing_secret': {
-            'patterns': [
-                r'Secret .* not found',
-                r'undefined.*secret',
-            ],
-            'auto_fixable': False,
-            'fix_function': None
-        },
-        'dependency': {
-            'patterns': [
-                r'ModuleNotFoundError',
-                r'No module named',
-                r'cannot import name',
-                r'pip.*failed',
-            ],
-            'auto_fixable': True,
-            'fix_function': 'fix_dependency_issue'
-        },
-        'timeout': {
-            'patterns': [
-                r'The job running on .* exceeded the maximum execution time',
-                r'timeout',
-                r'cancelled',
-            ],
-            'auto_fixable': True,
-            'fix_function': 'fix_timeout_issue'
-        }
-    }
-    
-    def __init__(self, repo_name: str, run_id: str, workflow_name: str):
-        self.repo_name = repo_name
-        self.run_id = run_id
-        self.workflow_name = workflow_name
-        self.github = Github(os.environ['GITHUB_TOKEN'])
-        self.repo = self.github.get_repo(repo_name)
-        
-        # Results
-        self.issue_type = None
-        self.diagnosis = ""
-        self.recommendations = []
-        self.auto_fix_available = False
-        self.pr_body = ""
-    
-    def diagnose(self) -> bool:
-        """Analyze the failed workflow run"""
-        print(f"🔍 Diagnosing workflow run #{self.run_id}")
-        
+def fetch_logs(repo, run_id: int) -> str:
+    """Download and extract the run's logs. Returns '' if unavailable."""
+    try:
+        run = repo.get_workflow_run(run_id)
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::Could not load run {run_id}: {exc}")
+        return ""
+
+    # PyGithub exposes the authenticated requester; reuse it so the token and
+    # any GitHub Enterprise base URL are handled for us.
+    try:
+        _, _, raw = repo._requester.requestBlob("GET", run.logs_url)  # noqa: SLF001
+        data = raw.read() if hasattr(raw, "read") else raw
+    except Exception:  # noqa: BLE001 - fall back to a plain authenticated GET
         try:
-            # Get workflow run details
-            run = self.repo.get_workflow_run(int(self.run_id))
-            
-            # Get failed jobs
-            jobs = run.jobs()
-            failed_jobs = [job for job in jobs if job.conclusion == 'failure']
-            
-            if not failed_jobs:
-                print("No failed jobs found")
-                return False
-            
-            # Analyze logs from failed jobs
-            all_logs = []
-            for job in failed_jobs:
-                print(f"  Analyzing job: {job.name}")
-                for step in job.steps:
-                    if step.conclusion == 'failure':
-                        # Get step logs (GitHub API doesn't expose this directly, so we infer from name)
-                        all_logs.append({
-                            'job': job.name,
-                            'step': step.name,
-                            'conclusion': step.conclusion
-                        })
-            
-            # Try to get raw logs via API
-            try:
-                # Note: This is a simplified version. In production, you'd need to download and parse logs
-                log_url = run.logs_url
-                print(f"  Log URL: {log_url}")
-            except:
-                pass
-            
-            # Pattern matching on available data
-            log_text = json.dumps(all_logs)
-            
-            # Check each failure pattern
-            for issue_type, config in self.FAILURE_PATTERNS.items():
-                for pattern in config['patterns']:
-                    if re.search(pattern, log_text, re.IGNORECASE):
-                        self.issue_type = issue_type
-                        self.auto_fix_available = config['auto_fixable']
-                        print(f"✅ Detected issue type: {issue_type}")
-                        return True
-            
-            # If no pattern matched, provide generic diagnosis
-            self.issue_type = "unknown"
-            self.auto_fix_available = False
-            print("⚠️ Could not identify specific failure pattern")
-            return True
-            
-        except Exception as e:
-            print(f"❌ Error during diagnosis: {e}")
-            return False
-    
-    def generate_recommendations(self):
-        """Generate fix recommendations based on diagnosis"""
-        
-        if self.issue_type == 'permissions':
-            self.diagnosis = """
-**Issue Type**: Missing Workflow Permissions
+            import requests
 
-The workflow failed because it lacks the necessary permissions to interact with GitHub resources (issues, pull requests, etc.).
+            token = os.environ.get("GITHUB_TOKEN", "")
+            resp = requests.get(
+                run.logs_url,
+                headers={"Authorization": f"Bearer {token}",
+                         "Accept": "application/vnd.github+json"},
+                timeout=60,
+            )
+            resp.raise_for_status()
+            data = resp.content
+        except Exception as exc:  # noqa: BLE001
+            print(f"::warning::Could not download logs: {exc}")
+            return ""
 
-**Root Cause**: GitHub Actions now requires explicit permission grants for security. The workflow file is missing a `permissions:` block.
-            """
-            
-            self.recommendations = [
-                "Add a `permissions:` block to the workflow file",
-                "Grant only the minimum required permissions (principle of least privilege)",
-                "Common permissions needed: `contents: read`, `issues: write`, `pull-requests: write`",
-                "Restart the workflow after applying the fix"
-            ]
-            
-            self.pr_body = """## 🤖 Automated Fix: Missing Workflow Permissions
-
-### Problem
-The workflow failed with a 403 permission error because GitHub Actions now requires explicit permission grants.
-
-### Solution
-Added the following `permissions:` block to the workflow file:
-
-```yaml
-permissions:
-  contents: read
-  issues: write
-  pull-requests: write
-```
-
-### Testing
-- [x] Validated YAML syntax
-- [x] Checked that all required permissions are included
-- [ ] Manual testing recommended before merge
-
-### References
-- [GitHub Actions Permissions Documentation](https://docs.github.com/en/actions/security-guides/automatic-token-authentication#permissions-for-the-github_token)
-- `.github/ACTIONS-FAILURE-ANALYSIS.md` (Root cause analysis)
-
----
-_Auto-generated by Workflow Doctor 🏥_
-            """
-        
-        elif self.issue_type == 'dependency':
-            self.diagnosis = """
-**Issue Type**: Missing Python Dependencies
-
-The workflow failed because required Python packages are not installed.
-
-**Root Cause**: Either `requirements.txt` is missing packages, or the workflow doesn't run `pip install -r requirements.txt`.
-            """
-            
-            self.recommendations = [
-                "Verify `requirements.txt` includes all necessary packages",
-                "Ensure workflow has a step to install dependencies: `pip install -r requirements.txt`",
-                "Consider using `pip list` to verify installed packages",
-                "Check for typos in package names"
-            ]
-        
-        elif self.issue_type == 'timeout':
-            self.diagnosis = """
-**Issue Type**: Workflow Timeout
-
-The workflow exceeded the maximum execution time and was cancelled.
-
-**Root Cause**: Job is taking too long, possibly due to infinite loops, blocking operations, or insufficient resources.
-            """
-            
-            self.recommendations = [
-                "Add `timeout-minutes:` to jobs (default is 360 minutes)",
-                "Optimize slow operations (use caching, parallelize tasks)",
-                "For long-running processes, use `isBackground: true` pattern",
-                "Consider breaking workflow into smaller, faster jobs"
-            ]
-        
-        else:
-            self.diagnosis = f"""
-**Issue Type**: {self.issue_type.title() if self.issue_type else 'Unknown'}
-
-The workflow failed but the specific issue could not be automatically identified.
-
-**Root Cause**: Requires manual investigation of workflow logs.
-            """
-            
-            self.recommendations = [
-                "Review the workflow run logs manually",
-                "Check for error messages in failed steps",
-                "Verify workflow syntax using `actionlint` or similar tools",
-                "Test workflow changes in a separate branch",
-                "Consult GitHub Actions documentation"
-            ]
-    
-    def fix_permissions_issue(self):
-        """Auto-fix: Add missing permissions to workflow file"""
-        print("🔧 Applying auto-fix for permissions issue...")
-        
-        # Find the workflow file
-        workflow_path = None
-        for yaml_file in Path('.github/workflows').glob('*.yml'):
-            with open(yaml_file) as f:
-                content = f.read()
-                if self.workflow_name in content:
-                    workflow_path = yaml_file
-                    break
-        
-        if not workflow_path:
-            print("❌ Could not find workflow file")
-            return False
-        
-        print(f"  Found workflow file: {workflow_path}")
-        
-        # Load YAML
-        with open(workflow_path) as f:
-            workflow = yaml.safe_load(f)
-        
-        # Check if permissions already exist
-        if 'permissions' in workflow:
-            print("  Permissions block already exists, updating...")
-        else:
-            print("  Adding new permissions block...")
-        
-        # Add/update permissions
-        workflow['permissions'] = {
-            'contents': 'read',
-            'issues': 'write',
-            'pull-requests': 'write',
-            'actions': 'read'
-        }
-        
-        # Write back to file
-        with open(workflow_path, 'w') as f:
-            yaml.dump(workflow, f, default_flow_style=False, sort_keys=False)
-        
-        print("✅ Permissions fix applied")
-        return True
-    
-    def fix_dependency_issue(self):
-        """Auto-fix: Update requirements.txt or add install step"""
-        print("🔧 Applying auto-fix for dependency issue...")
-        
-        # This is a placeholder - actual implementation would need to:
-        # 1. Parse error to identify missing package
-        # 2. Add to requirements.txt
-        # 3. Verify package exists on PyPI
-        
-        print("⚠️ Dependency fixes require manual intervention")
-        return False
-    
-    def fix_timeout_issue(self):
-        """Auto-fix: Add timeout-minutes to jobs"""
-        print("🔧 Applying auto-fix for timeout issue...")
-        
-        # Find and update workflow file to add timeout-minutes
-        # This is a placeholder for actual implementation
-        
-        print("⚠️ Timeout fixes require manual intervention")
-        return False
-    
-    def apply_fix(self) -> bool:
-        """Apply automatic fix if available"""
-        if not self.auto_fix_available:
-            print("⚠️ No auto-fix available for this issue")
-            return False
-        
-        config = self.FAILURE_PATTERNS[self.issue_type]
-        fix_function_name = config.get('fix_function')
-        
-        if not fix_function_name:
-            return False
-        
-        fix_function = getattr(self, fix_function_name)
-        return fix_function()
-    
-    def output_results(self):
-        """Output results in GitHub Actions format"""
-        # Fix f-string backslash issue by using variables
-        diagnosis_clean = self.diagnosis.replace('\n', ' ')
-        pr_body_clean = self.pr_body.replace('\n', ' ')
-        recommendations_str = ' | '.join(self.recommendations)
-        
-        # Set outputs for GitHub Actions (deprecated method, but keep for compatibility)
-        print(f"::set-output name=issue_type::{self.issue_type}")
-        print(f"::set-output name=auto_fix_available::{str(self.auto_fix_available).lower()}")
-        print(f"::set-output name=diagnosis::{diagnosis_clean}")
-        print(f"::set-output name=recommendations::{recommendations_str}")
-        print(f"::set-output name=pr_body::{pr_body_clean}")
-        
-        # Also write to GITHUB_OUTPUT file if available (modern method)
-        if 'GITHUB_OUTPUT' in os.environ:
-            with open(os.environ['GITHUB_OUTPUT'], 'a') as f:
-                f.write(f"issue_type={self.issue_type}\n")
-                f.write(f"auto_fix_available={str(self.auto_fix_available).lower()}\n")
-                f.write(f"diagnosis={diagnosis_clean}\n")
-                f.write(f"recommendations={recommendations_str}\n")
-                f.write(f"pr_body<<EOF\n{self.pr_body}\nEOF\n")
+    if isinstance(data, str):
+        return data
+    try:
+        with zipfile.ZipFile(io.BytesIO(data)) as archive:
+            parts = []
+            for name in archive.namelist():
+                if name.endswith("/"):
+                    continue
+                with archive.open(name) as fh:
+                    parts.append(f"===== {name} =====\n"
+                                 + fh.read().decode("utf-8", errors="replace"))
+            return "\n".join(parts)
+    except zipfile.BadZipFile:
+        return data.decode("utf-8", errors="replace")
 
 
-def main():
-    parser = argparse.ArgumentParser(description='Workflow Doctor - Auto-fix GitHub Actions failures')
-    parser.add_argument('--repo', required=True, help='Repository name (owner/repo)')
-    parser.add_argument('--run-id', required=True, help='Workflow run ID')
-    parser.add_argument('--workflow-name', required=True, help='Workflow name')
-    
+def failed_step_names(repo, run_id: int):
+    names = []
+    try:
+        run = repo.get_workflow_run(run_id)
+        for job in run.jobs():
+            if job.conclusion != "failure":
+                continue
+            for step in job.steps:
+                if step.conclusion == "failure":
+                    names.append(f"{job.name} / {step.name}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"::warning::Could not enumerate jobs: {exc}")
+    return names
+
+
+def extract_excerpt(logs: str, pattern: str, context: int = 3) -> str:
+    lines = logs.splitlines()
+    for i, line in enumerate(lines):
+        if re.search(pattern, line, re.IGNORECASE):
+            lo, hi = max(0, i - context), min(len(lines), i + context + 1)
+            return "\n".join(lines[lo:hi])[:1200]
+    return ""
+
+
+def diagnose(logs: str, steps):
+    """Return (issue_type, explanation, recommendations, excerpt)."""
+    if not logs:
+        return (
+            "logs_unavailable",
+            "The run's logs could not be downloaded, so no automated diagnosis "
+            "was possible. Logs expire, and the token may lack `actions: read`.",
+            ["Open the run in the Actions tab and read the failing step directly.",
+             "Confirm the workflow grants `actions: read`.",
+             "Re-run the job to regenerate logs if they have expired."],
+            "Failed steps: " + (", ".join(steps) if steps else "unknown"),
+        )
+
+    for pattern, label, explanation, recommendations in FAILURE_SIGNATURES:
+        if re.search(pattern, logs, re.IGNORECASE):
+            return label, explanation, recommendations, extract_excerpt(logs, pattern)
+
+    # No signature matched. Surface the most useful raw evidence instead of
+    # inventing a diagnosis.
+    excerpt = extract_excerpt(logs, r"^\s*(Error|error|FAILED|fatal|Traceback)") or \
+        "\n".join(logs.splitlines()[-40:])[:1200]
+    return (
+        "unknown",
+        "The failure did not match any known signature. The log excerpt below is "
+        "the most likely relevant section.",
+        ["Read the excerpt and the full run log in the Actions tab.",
+         "If this failure recurs, add a signature for it in workflow_doctor.py."],
+        excerpt,
+    )
+
+
+def build_report(run_id, workflow_name, issue_type, explanation, recommendations,
+                 excerpt, steps, run_url):
+    steps_text = "\n".join(f"- `{s}`" for s in steps) or "- (none reported)"
+    recs = "\n".join(f"{i}. {r}" for i, r in enumerate(recommendations, 1))
+    return (
+        f"## Workflow failure: {workflow_name}\n\n"
+        f"**Diagnosis:** {issue_type}\n\n"
+        f"{explanation}\n\n"
+        f"### Failed steps\n{steps_text}\n\n"
+        f"### Suggested fixes\n{recs}\n\n"
+        f"### Log excerpt\n```\n{excerpt or '(no excerpt available)'}\n```\n\n"
+        f"[View the full run]({run_url})\n\n"
+        f"---\n"
+        f"_Filed by Workflow Doctor. This tool diagnoses only; it does not edit "
+        f"workflow files._\n"
+    )
+
+
+def write_outputs(**fields) -> None:
+    path = os.environ.get("GITHUB_OUTPUT")
+    if path:
+        with open(path, "a", encoding="utf-8") as fh:
+            for key, value in fields.items():
+                delimiter = f"EOF_{key}_{os.urandom(8).hex()}"
+                fh.write(f"{key}<<{delimiter}\n{value}\n{delimiter}\n")
+    for key, value in fields.items():
+        preview = str(value).splitlines()[0][:120] if value else ""
+        print(f"{key}: {preview}")
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Diagnose a failed GitHub Actions run.")
+    parser.add_argument("--repo", required=True, help="owner/repo")
+    parser.add_argument("--run-id", required=True, type=int)
+    parser.add_argument("--workflow-name", default="unknown")
     args = parser.parse_args()
-    
-    print("🏥 Workflow Doctor Starting...")
-    print(f"  Repository: {args.repo}")
-    print(f"  Run ID: {args.run_id}")
-    print(f"  Workflow: {args.workflow_name}")
-    print()
-    
-    doctor = WorkflowDoctor(args.repo, args.run_id, args.workflow_name)
-    
-    # Diagnose the issue
-    if not doctor.diagnose():
-        print("❌ Diagnosis failed")
-        sys.exit(1)
-    
-    # Generate recommendations
-    doctor.generate_recommendations()
-    
-    # Try to apply fix
-    if doctor.auto_fix_available:
-        print()
-        success = doctor.apply_fix()
-        if success:
-            print("✅ Auto-fix applied successfully")
-        else:
-            print("⚠️ Auto-fix attempted but may require manual review")
-    
-    # Output results
-    print()
-    print("📋 Results:")
-    print(f"  Issue Type: {doctor.issue_type}")
-    print(f"  Auto-fixable: {doctor.auto_fix_available}")
-    print(f"  Diagnosis: {doctor.diagnosis[:100]}...")
-    print()
-    
-    doctor.output_results()
-    
-    print("✅ Workflow Doctor completed")
+
+    try:
+        from github import Github
+
+        repo = Github(os.environ["GITHUB_TOKEN"]).get_repo(args.repo)
+    except Exception as exc:  # noqa: BLE001
+        print(f"::error::Could not connect to GitHub: {exc}")
+        write_outputs(issue_type="error", report=f"Workflow Doctor failed to start: {exc}")
+        return 0
+
+    print(f"Diagnosing run {args.run_id} of '{args.workflow_name}'")
+    logs = fetch_logs(repo, args.run_id)
+    print(f"Retrieved {len(logs)} characters of log text.")
+    steps = failed_step_names(repo, args.run_id)
+    issue_type, explanation, recommendations, excerpt = diagnose(logs, steps)
+    print(f"Diagnosis: {issue_type}")
+
+    run_url = f"https://github.com/{args.repo}/actions/runs/{args.run_id}"
+    report = build_report(args.run_id, args.workflow_name, issue_type, explanation,
+                          recommendations, excerpt, steps, run_url)
+    write_outputs(issue_type=issue_type, report=report,
+                  title=f"Workflow failure: {args.workflow_name} ({issue_type})")
+    if step_summary := os.environ.get("GITHUB_STEP_SUMMARY"):
+        with open(step_summary, "a", encoding="utf-8") as fh:
+            fh.write(report)
+    return 0
 
 
-if __name__ == '__main__':
-    main()
+if __name__ == "__main__":
+    sys.exit(main())

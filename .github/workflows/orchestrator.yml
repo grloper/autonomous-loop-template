@@ -1,130 +1,63 @@
-name: "🎯 Orchestrator - Autonomous Project Lead"
+name: "Orchestrator - scan repository and file issues"
+
+# NOTE ON SCHEDULED RUNS
+# GitHub automatically disables a `schedule:` trigger after 60 days without
+# repository activity, and does not notify you. If the orchestrator stops
+# running on a quiet repository, check the workflow's state on the Actions tab
+# before assuming the code is at fault — this is the single most common reason
+# an "autonomous" loop silently stops.
 
 on:
   workflow_dispatch:
     inputs:
-      mode:
-        description: 'Orchestrator Mode'
-        required: true
-        type: choice
-        options:
-          - 'full-analysis'
-          - 'quick-check'
-          - 'emergency-review'
-        default: 'full-analysis'
-      
-      focus_area:
-        description: 'Focus Area'
-        required: false
-        type: choice
-        options:
-          - 'all'
-          - 'safety'
-          - 'software'
-          - 'hardware'
-          - 'integration'
-        default: 'all'
-  
-  schedule:
-    - cron: '0 8 * * 1'  # Every Monday at 8 AM UTC
+      dry_run:
+        description: 'Report findings without creating issues'
+        type: boolean
+        default: false
+      max_issues:
+        description: 'Maximum issues to create this run'
+        type: string
+        default: '5'
 
+  schedule:
+    - cron: '0 8 * * 1'  # Mondays, 08:00 UTC
+
+# The orchestrator reads the working tree and writes issues. It never pushes
+# commits, so it does not get `contents: write`.
 permissions:
-  contents: write
+  contents: read
   issues: write
-  pull-requests: write
+
+concurrency:
+  group: orchestrator
+  cancel-in-progress: false
 
 jobs:
-  orchestrator:
-    name: "🎯 Master Orchestrator"
+  scan:
+    name: "Scan and file issues"
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 15
+
     steps:
-      - name: 📥 Checkout Repository
+      - name: Check out repository
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      
-      - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      
-      - name: 📦 Install Dependencies
-        run: |
-          pip install PyGithub requests
-      
-      - name: 🎯 Run Orchestrator Analysis
+
+      - name: Install dependencies
+        run: pip install -r .github/scripts/requirements.txt
+
+      - name: Run orchestrator
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
-          ORCHESTRATOR_MODE: ${{ github.event.inputs.mode || 'scheduled' }}
-          FOCUS_AREA: ${{ github.event.inputs.focus_area || 'all' }}
         run: |
-          python .github/scripts/orchestrator.py
-      
-      - name: 💾 Upload Analysis Report
-        uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: orchestrator-report-${{ github.run_id }}
-          path: orchestrator_report.md
-      
-      - name: 🤖 Trigger Copilot Coding Agents
-        uses: actions/github-script@v7
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          script: |
-            const fs = require('fs');
-            const reportContent = fs.readFileSync('orchestrator_report.md', 'utf8');
-            
-            // Extract issue numbers from report
-            const issueMatches = reportContent.matchAll(/#(\d+):/g);
-            const issueNumbers = [...issueMatches].map(m => parseInt(m[1]));
-            
-            console.log(`Found ${issueNumbers.length} issues to assign Copilot coding agents`);
-            
-            for (const issueNum of issueNumbers) {
-              try {
-                // Get issue details
-                const { data: issue } = await github.rest.issues.get({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNum
-                });
-                
-                console.log(`Triggering Copilot agent for issue #${issueNum}: ${issue.title}`);
-                
-                // Add a comment to signal intent (Copilot coding agent will auto-detect and create PR)
-                await github.rest.issues.createComment({
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  issue_number: issueNum,
-                  body: `🚀 **Copilot Coding Agent Activated**\n\nAutomatic PR creation initiated for this issue.\n\n_This is part of the autonomous development loop. The coding agent will analyze the requirements and create a pull request shortly._`
-                });
-                
-                console.log(`✅ Copilot agent triggered for #${issueNum}`);
-              } catch (error) {
-                console.error(`❌ Failed to trigger agent for #${issueNum}:`, error.message);
-              }
-            }
-      
-      - name: 🎉 Orchestrator Complete
-        run: |
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "🎯 ORCHESTRATOR RUN COMPLETE"
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          echo "✅ Project analyzed"
-          echo "✅ Priorities identified"
-          echo "✅ Issues created"
-          echo "✅ Agents triggered"
-          echo "✅ Report generated"
-          echo ""
-          echo "🤖 The project is now self-managing!"
-          echo ""
-          echo "Next automatic review: Next Monday at 8am UTC"
-          echo "Manual trigger: Click 'Run workflow' button anytime"
-          echo ""
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          python .github/scripts/orchestrator.py \
+            --max-issues "${{ inputs.max_issues || '5' }}" \
+            ${{ inputs.dry_run == true && '--dry-run' || '' }}

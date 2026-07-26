@@ -1,10 +1,13 @@
-name: "✅ Manual PR Review & Merge"
+name: "Manual PR review and merge"
+
+# Human-triggered escape hatch for acting on a PR without waiting for, or
+# overriding, the automatic reviewer.
 
 on:
   workflow_dispatch:
     inputs:
       pr_number:
-        description: 'PR number to review and merge'
+        description: 'PR number to act on'
         required: true
         type: number
       action:
@@ -16,106 +19,106 @@ on:
           - 'approve-only'
           - 'just-merge'
           - 'request-changes'
-        default: 'approve-and-merge'
+        default: 'approve-only'
+      reason:
+        description: 'Why (recorded in the review body)'
+        required: false
+        type: string
 
 permissions:
   contents: write
   pull-requests: write
+  issues: write
 
 jobs:
-  manual-review:
-    name: "Manual PR Action"
+  act:
+    name: "Act on pull request"
     runs-on: ubuntu-latest
-    
+    timeout-minutes: 5
+    # No checkout: every step here talks to the API only, so there is no
+    # reason to place PR code on the runner.
+
     steps:
-      - name: 📥 Checkout
-        uses: actions/checkout@v4
-      
-      - name: ✅ Approve PR
+      - name: Approve
         if: inputs.action == 'approve-and-merge' || inputs.action == 'approve-only'
         uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
         with:
           script: |
+            const { PR_NUMBER, REASON, ACTOR } = process.env;
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: ${{ inputs.pr_number }},
+              pull_number: Number(PR_NUMBER),
               event: 'APPROVE',
-              body: '✅ **Manually Approved via Workflow**\n\nReviewed and approved by workflow trigger.'
+              body: `Manually approved by @${ACTOR}.\n\n${REASON || '(no reason given)'}`,
             });
-            console.log('✅ PR approved');
-      
-      - name: 🔄 Merge PR
-        if: inputs.action == 'approve-and-merge' || inputs.action == 'just-merge'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            try {
-              const result = await github.rest.pulls.merge({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: ${{ inputs.pr_number }},
-                merge_method: 'squash',
-                commit_title: 'Manually merged PR #${{ inputs.pr_number }}',
-                commit_message: 'Reviewed and merged via manual workflow trigger'
-              });
-              
-              console.log('✅ PR merged successfully');
-              
-              // Get PR details to find related issues
-              const pr = await github.rest.pulls.get({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                pull_number: ${{ inputs.pr_number }}
-              });
-              
-              // Close related issues
-              const body = pr.data.body || '';
-              const issue_numbers = body.match(/#(\d+)/g);
-              
-              if (issue_numbers) {
-                for (const issue_ref of issue_numbers) {
-                  const issue_number = parseInt(issue_ref.replace('#', ''));
-                  await github.rest.issues.createComment({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue_number,
-                    body: `✅ Fixed by PR #${{ inputs.pr_number }} (manually merged)`
-                  });
-                  await github.rest.issues.update({
-                    owner: context.repo.owner,
-                    repo: context.repo.repo,
-                    issue_number: issue_number,
-                    state: 'closed'
-                  });
-                  console.log(`Closed issue #${issue_number}`);
-                }
-              }
-              
-            } catch (error) {
-              console.error('❌ Merge failed:', error.message);
-              core.setFailed(`Failed to merge: ${error.message}`);
-            }
-      
-      - name: ❌ Request Changes
+
+      - name: Request changes
         if: inputs.action == 'request-changes'
         uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
         with:
           script: |
+            const { PR_NUMBER, REASON, ACTOR } = process.env;
             await github.rest.pulls.createReview({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              pull_number: ${{ inputs.pr_number }},
+              pull_number: Number(PR_NUMBER),
               event: 'REQUEST_CHANGES',
-              body: '⚠️ **Changes Requested via Workflow**\n\nPlease address the issues and update the PR.'
+              body: `Changes requested by @${ACTOR}.\n\n${REASON || '(no reason given)'}`,
             });
-            console.log('⚠️ Changes requested');
-      
-      - name: 📊 Summary
+
+      - name: Merge
+        if: inputs.action == 'approve-and-merge' || inputs.action == 'just-merge'
+        uses: actions/github-script@v7
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+        with:
+          script: |
+            const number = Number(process.env.PR_NUMBER);
+            await github.rest.pulls.merge({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: number,
+              merge_method: 'squash',
+            });
+            core.info(`Merged PR #${number}`);
+
+            // GitHub already closes issues linked by a closing keyword when the
+            // PR merges into the default branch. Only report those here.
+            //
+            // The previous version matched every `#\d+` in the PR body and
+            // closed each one, so a PR that merely referenced "see #42" would
+            // close issue 42. Requiring a closing keyword avoids that.
+            const { data: pr } = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: number,
+            });
+            const linked = [...(pr.body || '').matchAll(
+              /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi
+            )].map(m => m[1]);
+            core.info(linked.length
+              ? `Linked issues closed by GitHub: ${linked.join(', ')}`
+              : 'No closing-keyword links found in the PR body.');
+
+      - name: Summary
+        if: always()
+        env:
+          PR_NUMBER: ${{ inputs.pr_number }}
+          ACTION: ${{ inputs.action }}
         run: |
-          echo "## Manual PR Review Complete" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**PR**: #${{ inputs.pr_number }}" >> $GITHUB_STEP_SUMMARY
-          echo "**Action**: ${{ inputs.action }}" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "✅ Action completed successfully" >> $GITHUB_STEP_SUMMARY
+          {
+            echo "## Manual PR action"
+            echo ""
+            echo "- PR: #${PR_NUMBER}"
+            echo "- Action: ${ACTION}"
+            echo "- Triggered by: @${{ github.actor }}"
+          } >> "$GITHUB_STEP_SUMMARY"
