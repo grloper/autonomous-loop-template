@@ -30,14 +30,18 @@ git clone --depth 1 --quiet "$REPO_URL" "$TEMP_DIR/src" \
   || die "could not clone $REPO_URL"
 
 FILES=(
-  ".github/workflows/orchestrator.yml"
-  ".github/workflows/copilot-automation.yml"
-  ".github/workflows/workflow-doctor.yml"
+  ".github/workflows/gate.yml"
+  ".github/workflows/scan.yml"
+  ".github/workflows/doctor.yml"
   ".github/workflows/manual-pr-review.yml"
-  ".github/scripts/orchestrator.py"
-  ".github/scripts/auto_reviewer.py"
-  ".github/scripts/workflow_doctor.py"
+  ".github/scripts/gate.py"
+  ".github/scripts/policy.py"
+  ".github/scripts/injection.py"
+  ".github/scripts/scan.py"
+  ".github/scripts/doctor.py"
+  ".github/scripts/demo.py"
   ".github/scripts/requirements.txt"
+  ".github/agent-policy.yml"
   ".github/copilot-instructions.md"
 )
 
@@ -68,19 +72,20 @@ Installed. Before you commit:
      agent reading unfilled placeholders produces worse changes than one
      reading nothing at all.
 
-  2. Edit CRITICAL_PATH_GLOBS in .github/scripts/auto_reviewer.py so it covers
-     your authentication, payment, migration, and infrastructure paths. Those
+  2. Edit protected_paths in .github/agent-policy.yml so it names your
+     authentication, payment, migration, and infrastructure directories. Those
      paths will then always require a human reviewer.
 
-  3. See what the scanner would file, without filing anything:
+  3. Watch the gate decide, offline:
 
        pip install -r .github/scripts/requirements.txt
-       python .github/scripts/orchestrator.py --dry-run
+       python .github/scripts/demo.py
 
-  4. Review the workflow permissions. The reviewer runs against the trusted
-     base commit and only the merge job holds contents: write.
+  4. See what the marker scan would file, without filing anything:
 
-The orchestrator runs Mondays at 08:00 UTC. GitHub disables scheduled
-workflows after 60 days without repository activity and does not tell you, so
-check the Actions tab if runs stop appearing.
+       python .github/scripts/scan.py --dry-run
+
+The gate runs on every pull request. The marker scan runs Mondays at 08:00
+UTC; GitHub disables scheduled workflows after 60 days without repository
+activity and does not tell you, so check the Actions tab if runs stop.
 NEXT

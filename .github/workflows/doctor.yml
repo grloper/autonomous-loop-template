@@ -1,10 +1,11 @@
-name: "Workflow Doctor - diagnose failed runs"
+name: "Failure doctor"
 
 on:
   workflow_run:
     workflows:
-      - "Orchestrator - scan repository and file issues"
-      - "Auto-Review Pull Requests"
+      - "Repository scan"
+      - "Merge gate"
+      - "CI"
     types: [completed]
   workflow_dispatch:
     inputs:
@@ -52,7 +53,7 @@ jobs:
           RUN_ID: ${{ github.event.workflow_run.id || inputs.run_id }}
           WORKFLOW_NAME: ${{ github.event.workflow_run.name || 'manual' }}
         run: |
-          python .github/scripts/workflow_doctor.py \
+          python .github/scripts/doctor.py \
             --repo "${{ github.repository }}" \
             --run-id "$RUN_ID" \
             --workflow-name "$WORKFLOW_NAME"

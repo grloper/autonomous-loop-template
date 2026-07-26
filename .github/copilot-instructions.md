@@ -38,7 +38,7 @@ the linter already covers it.)
 ## Files that need human review
 
 Changes to these must never be merged automatically. Keep this list in sync
-with `CRITICAL_PATH_GLOBS` in `.github/scripts/auto_reviewer.py`.
+with `protected_paths` in `.github/agent-policy.yml`.
 
 - `.github/workflows/**` — CI runs with repository credentials
 - (authentication, payments, migrations, infrastructure, key management…)

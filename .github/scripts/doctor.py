@@ -196,7 +196,7 @@ def diagnose(logs: str, steps):
         "The failure did not match any known signature. The log excerpt below is "
         "the most likely relevant section.",
         ["Read the excerpt and the full run log in the Actions tab.",
-         "If this failure recurs, add a signature for it in workflow_doctor.py."],
+         "If this failure recurs, add a signature for it in doctor.py."],
         excerpt,
     )
 

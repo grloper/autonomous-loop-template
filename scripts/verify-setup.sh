@@ -14,12 +14,15 @@ bad()  { printf '  FAIL  %s\n' "$1"; FAIL=$((FAIL+1)); }
 
 printf '\nRequired files\n'
 for f in \
-  ".github/workflows/orchestrator.yml" \
-  ".github/workflows/copilot-automation.yml" \
-  ".github/workflows/workflow-doctor.yml" \
-  ".github/scripts/orchestrator.py" \
-  ".github/scripts/auto_reviewer.py" \
-  ".github/scripts/workflow_doctor.py" \
+  ".github/workflows/scan.yml" \
+  ".github/workflows/gate.yml" \
+  ".github/workflows/doctor.yml" \
+  ".github/workflows/ci.yml" \
+  ".github/scripts/scan.py" \
+  ".github/scripts/gate.py" \
+  ".github/scripts/doctor.py" \
+  ".github/scripts/policy.py" \
+  ".github/scripts/injection.py" \
   ".github/scripts/requirements.txt"
 do
   [[ -f "$f" ]] && ok "$f" || bad "$f is missing"
@@ -39,31 +42,31 @@ fi
 printf '\nSafety properties\n'
 
 # 1. The reviewer must not run code supplied by the PR it is reviewing.
-if grep -q 'pull_request\.head\.\(ref\|sha\)' .github/workflows/copilot-automation.yml 2>/dev/null; then
-  bad "auto-review checks out the PR head — a PR could modify the reviewer and self-approve"
-elif grep -q 'base\.sha' .github/workflows/copilot-automation.yml 2>/dev/null; then
-  ok "auto-review checks out the trusted base commit"
+if grep -q 'pull_request\.head\.\(ref\|sha\)' .github/workflows/gate.yml 2>/dev/null; then
+  bad "the gate checks out the PR head — a PR could modify the reviewer and self-approve"
+elif grep -q 'base\.sha' .github/workflows/gate.yml 2>/dev/null; then
+  ok "the gate checks out the trusted base commit"
 else
-  warn "could not determine which ref auto-review checks out"
+  warn "could not determine which ref the gate checks out"
 fi
 
 # 2. The doctor must never rewrite workflow YAML ('on:' becomes 'true:').
-if grep -qE '^\s*(import|from)[[:space:]]+yaml' .github/scripts/workflow_doctor.py 2>/dev/null; then
-  bad "workflow_doctor.py imports yaml — a round trip rewrites 'on:' as 'true:'"
+if grep -qE '^\s*(import|from)[[:space:]]+yaml' .github/scripts/doctor.py 2>/dev/null; then
+  bad "doctor.py imports yaml — a round trip rewrites 'on:' as 'true:'"
 else
-  ok "workflow_doctor.py does not parse or rewrite workflow YAML"
+  ok "doctor.py does not parse or rewrite workflow YAML"
 fi
 
 # 3. The reviewer must fail closed.
-if grep -q 'auto_merge=False' .github/scripts/auto_reviewer.py 2>/dev/null &&
-   grep -q 'except Exception' .github/scripts/auto_reviewer.py 2>/dev/null; then
-  ok "auto_reviewer.py has a fail-closed error path"
+if grep -q 'auto_merge=False' .github/scripts/gate.py 2>/dev/null &&
+   grep -q 'except Exception' .github/scripts/gate.py 2>/dev/null; then
+  ok "gate.py has a fail-closed error path"
 else
-  warn "could not confirm auto_reviewer.py fails closed on error"
+  warn "could not confirm gate.py fails closed on error"
 fi
 
 # 4. Workflow-level contents: write is broader than any of these jobs needs.
-for wf in .github/workflows/orchestrator.yml .github/workflows/workflow-doctor.yml; do
+for wf in .github/workflows/scan.yml .github/workflows/doctor.yml; do
   [[ -f "$wf" ]] || continue
   if awk '/^permissions:/{p=1;next} /^[^[:space:]#]/{p=0} p&&/contents:[[:space:]]*write/{f=1} END{exit !f}' "$wf"; then
     bad "$(basename "$wf") grants workflow-level contents: write — scope it to the job that needs it"
@@ -80,10 +83,10 @@ else
 fi
 
 # 6. The scanner must exclude by path component, not substring.
-if grep -q "'.git' in str(" .github/scripts/orchestrator.py 2>/dev/null; then
-  bad "orchestrator.py excludes by substring — '.git' also matches '.github', hiding that tree"
+if grep -q "'.git' in str(" .github/scripts/scan.py 2>/dev/null; then
+  bad "scan.py excludes by substring — '.git' also matches '.github', hiding that tree"
 else
-  ok "orchestrator.py excludes by path component"
+  ok "scan.py excludes by path component"
 fi
 
 printf '\nSyntax\n'
@@ -101,11 +104,23 @@ else
   warn "pyyaml not installed locally — skipped workflow YAML validation"
 fi
 
-printf '\nDry run\n'
-if python3 .github/scripts/orchestrator.py --dry-run >/dev/null 2>&1; then
-  ok "orchestrator --dry-run completes"
+printf '\nPolicy and demo\n'
+if python3 -c 'import sys; sys.path.insert(0,".github/scripts"); import policy; p=policy.load_policy("."); sys.exit(1 if p.warnings else 0)' 2>/dev/null; then
+  ok "agent-policy.yml loads cleanly"
 else
-  warn "orchestrator --dry-run failed — run it directly to see the error"
+  bad "agent-policy.yml could not be loaded — the gate falls back to strict defaults"
+fi
+if python3 .github/scripts/demo.py --no-color >/dev/null 2>&1; then
+  ok "all demo scenarios behave as documented"
+else
+  bad "a demo scenario did not behave as documented — the README may be wrong"
+fi
+
+printf '\nDry run\n'
+if python3 .github/scripts/scan.py --dry-run >/dev/null 2>&1; then
+  ok "scan --dry-run completes"
+else
+  warn "scan --dry-run failed — run it directly to see the error"
 fi
 
 printf '\n%d ok, %d warnings, %d failures\n\n' "$PASS" "$WARN" "$FAIL"

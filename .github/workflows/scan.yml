@@ -1,4 +1,4 @@
-name: "Orchestrator - scan repository and file issues"
+name: "Repository scan"
 
 # NOTE ON SCHEDULED RUNS
 # GitHub automatically disables a `schedule:` trigger after 60 days without
@@ -52,12 +52,12 @@ jobs:
       - name: Install dependencies
         run: pip install -r .github/scripts/requirements.txt
 
-      - name: Run orchestrator
+      - name: Run the scan
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
           GITHUB_RUN_ID: ${{ github.run_id }}
         run: |
-          python .github/scripts/orchestrator.py \
+          python .github/scripts/scan.py \
             --max-issues "${{ inputs.max_issues || '5' }}" \
             ${{ inputs.dry_run == true && '--dry-run' || '' }}
