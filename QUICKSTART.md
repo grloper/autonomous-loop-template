@@ -19,6 +19,10 @@ python .github/scripts/scan.py --root ./services/api --dry-run
 # Diagnose a failed run
 python .github/scripts/doctor.py --repo owner/name --run-id 123456789
 
+# Propose instruction improvements from measured failures
+python .github/scripts/prompts.py --repo owner/name --days 90
+python .github/scripts/prompts.py --repo owner/name --min-occurrences 5
+
 # Measure which agents' merges actually survived
 python .github/scripts/outcomes.py --repo owner/name --days 90
 python .github/scripts/outcomes.py --repo owner/name --days 90 --write
@@ -78,3 +82,8 @@ Each corresponds to a defect that shipped once. `verify-setup.sh` enforces them.
    path or bypass CI, size, diff, or injection checks.
 8. **Trust scores use the Wilson lower bound.** Switching to the raw rate would
    let a single clean merge read as 100% reliable.
+9. **Learned rules are proposed, never applied.** `prompts.py` writes only
+   behind `--apply`, for a human-reviewed pull request. An agent that can edit
+   its own guardrails can remove them.
+10. **Learned rules constrain, never permit.** No rule may widen what an agent
+    is allowed to do, or the loop can grant itself autonomy.

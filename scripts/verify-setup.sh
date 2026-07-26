@@ -24,6 +24,7 @@ for f in \
   ".github/scripts/policy.py" \
   ".github/scripts/injection.py" \
   ".github/scripts/outcomes.py" \
+  ".github/scripts/prompts.py" \
   ".github/scripts/requirements.txt"
 do
   [[ -f "$f" ]] && ok "$f" || bad "$f is missing"
@@ -90,7 +91,15 @@ else
   warn "trust.enabled is true — trusted authors can auto-merge trusted_auto_merge_paths"
 fi
 
-# 7. The scanner must exclude by path component, not substring.
+# 7. Learned rules must never be applied without a human.
+if grep -qE 'instructions_path\.write_text' .github/scripts/prompts.py 2>/dev/null &&
+   ! grep -q 'if args.apply' .github/scripts/prompts.py 2>/dev/null; then
+  bad "prompts.py writes instructions without an --apply guard"
+else
+  ok "instruction changes are proposed, never auto-applied"
+fi
+
+# 8. The scanner must exclude by path component, not substring.
 if grep -q "'.git' in str(" .github/scripts/scan.py 2>/dev/null; then
   bad "scan.py excludes by substring — '.git' also matches '.github', hiding that tree"
 else

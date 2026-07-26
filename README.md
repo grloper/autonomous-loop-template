@@ -1,25 +1,34 @@
 # Agent Gate
 
-**Which of your coding agents can you actually trust to merge?**
+**A closed loop that makes your coding agents measurably better over time.**
 
 [![CI](https://github.com/grloper/autonomous-pipeline-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/grloper/autonomous-pipeline-agents/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Your repo has Copilot, Claude, Devin, and Cursor opening pull requests. You have
-no idea which one's code survives contact with production, because nobody
-measures it. Branch protection asks *"did a human click approve?"* CI asks *"do
-the tests pass?"* Neither asks the question you actually care about.
+Your repo has Copilot, Claude, Devin, and Cursor opening pull requests. They make
+the same mistakes every week, and the file that tells them what to do —
+`copilot-instructions.md`, `AGENTS.md`, `CLAUDE.md` — was written once and never
+revisited. Nothing connects what agents *did* to what they are *told*.
 
-Agent Gate does two things:
+Agent Gate closes that loop:
 
-1. **Blocks** machine-authored changes that shouldn't merge unread — by reading
-   the diff, not the filename, and by catching text designed to hijack the *next*
-   agent that reads your repo.
-2. **Measures** what happened after every merge — reverts, branch breakage — and
-   turns that into a per-agent survival score. Agents that earn a track record
-   get more autonomy. Agents that don't, don't.
+```
+   agents open PRs
+         │
+         ▼
+   ① GATE      block what shouldn't merge unread — reads the diff,
+         │      not the filename; catches text aimed at the next agent
+         ▼
+   ② MEASURE   after merge: reverted? broke the branch?
+         │      → per-agent survival score
+         ▼
+   ③ LEARN     recurring failures become proposed instruction rules,
+         │      each citing the PRs that motivated it
+         └──────────────────────────► back into the agents' instructions
+```
 
-The second part is the one nobody else does.
+Step ③ is the one nobody else does. Everyone has linters and reviewers. Nobody
+feeds *measured outcomes* back into the prompt.
 
 ## See it in 5 seconds
 
@@ -66,6 +75,28 @@ Look at the last two rows. **Same pull request. Different answer.** The only
 thing that changed is that one agent has a measured track record and the other
 doesn't.
 
+Then the loop closes:
+
+```console
+Learning from failures (9 failure records from merge history)
+────────────────────────────────────────────────────────────────────────────────────
+protected-path seen 4x  (#312, #318, #327, #341)
+  proposed rule: Do not modify src/auth/**. If a change there is genuinely
+  required, open an issue describing what needs to change and why, and stop.
+ci-red seen 3x  (#318, #329, #344)
+  proposed rule: Run the project's tests and linter locally and make them pass
+  before opening a pull request. Do not open one to see whether CI passes.
+hardcoded-secret: seen 2x — below the threshold, no rule proposed
+
+Proposed as a pull request against .github/copilot-instructions.md.
+Never applied automatically: an agent that can edit its own
+guardrails can remove them.
+```
+
+An agent hit the same protected directory four times. Instead of blocking it a
+fifth time, the system proposes the sentence that stops it happening — and cites
+the four pull requests as evidence. Two incidents is not enough; that rule waits.
+
 These scenarios run as tests in CI, so this output can't drift from the code.
 
 ## Earned autonomy
@@ -97,6 +128,33 @@ name. It never unlocks a protected path and never relaxes CI, size, diff, or
 injection checks — there are tests asserting each of those.
 
 Ships **disabled**. Turning it on is a decision you make.
+
+## Learning from failures
+
+`prompts.py` reads gate verdicts and merge outcomes, clusters recurring
+failures, and proposes edits to your agent instructions file.
+
+**It proposes, never applies.** An agent that can edit its own guardrails can
+remove them — CVE-2025-53773 was exactly this, a prompt injection that wrote
+`chat.tools.autoApprove` into a settings file and disabled every confirmation.
+Proposals arrive as an issue you accept or reject per rule.
+
+**It only owns a managed block.** Edits land between two HTML-comment markers.
+Everything you wrote in that file is untouched, byte for byte, and there are
+tests asserting it.
+
+**Rules are earned by repetition.** Three occurrences by default. A file that
+grows a rule per incident becomes long enough that agents stop honouring any of
+it.
+
+**Rules retire.** When a failure class stops recurring for 100 clean PRs, the
+rule that prevented it is proposed for removal. Instruction files only ever grow
+unless something prunes them. If the failure returns, the evidence proposes the
+rule again.
+
+**Rules constrain, never permit.** A learned rule can tell an agent to stop
+doing something. It can never grant permission, widen a path, or skip a review —
+asserted in tests against every rule in the catalogue.
 
 ## Why the blocking half is better than it looks
 
@@ -217,14 +275,18 @@ This holds write access to your repo, so:
   CI result counts, so flaky infrastructure isn't blamed on whoever merged last.
 - Trust scores need volume. Below `min_sample` merges, an author is
   `insufficient-data` no matter how clean the record.
+- Learned rules come from a fixed catalogue of failure classes. A novel mistake
+  produces no proposal until someone adds a rule template for it.
+- The loop needs traffic. On a repo with a handful of agent PRs a month, nothing
+  will cross the evidence threshold and nothing will be proposed — correctly.
 
 ## Development
 
 ```bash
 pip install -r .github/scripts/requirements.txt pyyaml
-python -m unittest discover -s tests -v   # 114 tests
+python -m unittest discover -s tests -v   # 143 tests
 python .github/scripts/demo.py            # 12 scenarios
-bash scripts/verify-setup.sh              # 35 checks
+bash scripts/verify-setup.sh              # 39 checks
 ```
 
 ## License

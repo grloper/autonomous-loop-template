@@ -18,6 +18,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import policy as policy_mod  # noqa: E402
+import prompts  # noqa: E402
 from gate import ChangedFile, PullRequestFacts, evaluate, render  # noqa: E402
 
 GREEN, RED, YELLOW, DIM, BOLD, OFF = (
@@ -156,6 +157,29 @@ def main() -> int:
             (d.blockers or ["—"])[0]
         print(f"{DIM}{'':44} └─ {reason[:100]}{OFF}")
     print()
+
+    # The loop closing: measured failures become a proposed instruction.
+    F = prompts.FailureRecord
+    history = (
+        [F(n, "some-new-tool[bot]", "protected-path", "src/auth/**")
+         for n in (312, 318, 327, 341)]
+        + [F(n, "some-new-tool[bot]", "ci-red") for n in (318, 329, 344)]
+        + [F(n, "copilot-swe-agent[bot]", "hardcoded-secret") for n in (301, 336)]
+    )
+    proposals = prompts.cluster(history, min_occurrences=3)
+    print(f"{BOLD}Learning from failures{OFF} "
+          f"{DIM}({len(history)} failure records from merge history){OFF}")
+    print(f"{DIM}{'─' * 84}{OFF}")
+    for p in proposals:
+        cited = ", ".join(f"#{n}" for n in p.evidence)
+        print(f"{YELLOW}{p.category}{OFF} seen {p.occurrences}x  {DIM}({cited}){OFF}")
+        print(f"  proposed rule: {p.rule}")
+    dropped = {f.category for f in history} - {p.category for p in proposals}
+    for category in sorted(dropped):
+        print(f"{DIM}{category}: seen 2x — below the threshold, no rule proposed{OFF}")
+    print(f"\n{DIM}Proposed as a pull request against .github/copilot-instructions.md.")
+    print(f"Never applied automatically: an agent that can edit its own")
+    print(f"guardrails can remove them.{OFF}\n")
 
     if mismatches:
         print(f"{RED}{mismatches} scenario(s) did not behave as documented.{OFF}\n")

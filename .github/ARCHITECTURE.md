@@ -18,13 +18,18 @@ workflow_run ──▶ doctor.py ─▶ one issue per failure type [actions: rea
 
 schedule ──────▶ outcomes.py ▶ trust ledger + scoreboard [pull-requests: read]
                     │
-                    └────────▶ read back by gate.py to widen the allowlist
+                    ├────────▶ read back by gate.py to widen the allowlist
+                    ▼
+schedule ──────▶ prompts.py ─▶ proposed instruction rules  [issues: write]
+                    │
+                    └────────▶ a human accepts → agents behave differently
 ```
 
-The loop closes at `outcomes.py`. Everything else in this repository is a
-prediction made before merge; that module is the only measurement taken after
-one, and therefore the only thing that can tell you whether the predictions
-were any good.
+Two return paths make this a loop rather than a pipeline. `outcomes.py` feeds
+measured reliability back into what an agent is *allowed* to do; `prompts.py`
+feeds measured failures back into what an agent is *told* to do. Everything
+upstream of them is a prediction made before merge; these two are the only
+measurements taken after one.
 
 ## Module layout
 
@@ -37,6 +42,7 @@ were any good.
 | `scan.py` | Marker scanning and issue filing. |
 | `doctor.py` | Failed-run log diagnosis. |
 | `outcomes.py` | Revert and branch-break detection, Wilson-bounded trust scoring. Pure analysis plus a GitHub collector, same split as `gate.py`. |
+| `prompts.py` | Clusters recurring failures into proposed instruction rules. Owns one delimited block in the instructions file and nothing else. |
 
 The pure-core / thin-adapter split in `gate.py` is the load-bearing design
 decision. It is why the gate can be demonstrated offline, why the tests need no
@@ -137,11 +143,43 @@ Trust only widens `auto_merge_paths`, and only to patterns the policy names in
 size, diff, or injection checks — `tests/test_outcomes.py` asserts each of those
 independently. It ships disabled.
 
+## Learning from failures
+
+`prompts.py` closes the second return path. It reads gate verdicts and merge
+outcomes, groups them by failure class, and proposes the instruction that would
+have prevented each recurring one.
+
+**Proposals are never applied.** An agent able to edit its own guardrails can
+remove them, and that is a documented attack rather than a theoretical one —
+CVE-2025-53773 was a prompt injection that wrote `chat.tools.autoApprove` into a
+settings file and disabled every tool confirmation. The CLI gates writing behind
+`--apply`, intended for a human-reviewed pull request, and `verify-setup.sh`
+fails the build if that guard disappears.
+
+**The tool owns one delimited block.** Edits land between two HTML-comment
+markers; the rest of the instructions file is never read for anything but those
+markers. A test applies two successive rule sets to hand-written prose and
+asserts every original line survives.
+
+**Rules are earned and retired.** Three occurrences before a rule is proposed;
+retirement proposed once a failure class has been absent for 100 pull requests.
+Both thresholds exist for the same reason: an instructions file long enough to
+skim is one agents stop following, so rules have to justify their space both
+when they arrive and when they stay.
+
+**Rules constrain, never permit.** The catalogue is asserted in tests to contain
+no phrasing that widens what an agent may do. A learned rule can say "do not"; it
+can never say "you may skip review". Otherwise the loop could talk itself into
+more autonomy than it earned.
+
 ## What this does not do
 
 - **It does not implement the issues `scan.py` files.** Wiring a coding agent to
   the `autonomous-loop` label is a separate, deliberate decision.
 - **It cannot see a silent undo.** A rewrite that reverses a change without
   saying "revert" does not register as a failure.
+- **It cannot invent a rule for a novel mistake.** Proposals come from a fixed
+  catalogue of failure classes; an unfamiliar failure produces nothing until
+  someone adds a template for it.
 - **It does not survive repository inactivity.** GitHub disables scheduled
   workflows after 60 days without activity and notifies no one.
