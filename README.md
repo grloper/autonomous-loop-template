@@ -1,434 +1,200 @@
-# 🔄 Autonomous Development Loop
+# Merge gate for AI-authored pull requests
 
-> **Make any GitHub repository self-managing in 5 minutes**
-
+[![CI](https://github.com/grloper/autonomous-pipeline-agents/actions/workflows/ci.yml/badge.svg)](https://github.com/grloper/autonomous-pipeline-agents/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
-[![GitHub stars](https://img.shields.io/github/stars/grloper/autonomous-loop-template?style=social)](https://github.com/grloper/autonomous-loop-template)
-[![Install](https://img.shields.io/badge/install-one--line-brightgreen)](https://github.com/grloper/autonomous-loop-template#-one-line-install)
 
-**Your repository that:**
-- ✅ Finds work automatically (TODOs, bugs, missing tests)
-- ✅ Creates prioritized GitHub issues
-- ✅ Assigns AI agents to implement fixes
-- ✅ Reviews and merges safe code
-- ✅ Heals itself when workflows break
-- ✅ Runs forever without human intervention
+Coding agents open pull requests now. Copilot, Claude, Devin, Cursor — they all
+push branches and ask to merge. Branch protection asks *"did a human approve
+this?"* and CI asks *"do the tests pass?"* Neither asks the question that
+actually matters:
 
-**Result:** Save 6+ hours/week per developer. Your repo evolves while you sleep. 😴
+> **Should a machine-authored change merge without anyone reading it?**
 
----
+This is a policy engine that answers that. It reads the diff, checks who wrote
+it, scans for text trying to hijack the *next* agent, and refuses to merge
+anything it could not fully inspect.
 
-## 🎬 How It Works
+## Demo
 
-Watch your repository evolve autonomously:
+No token, no network, no setup:
 
-1. **📊 Orchestrator scans** your code weekly (or on-demand)
-2. **🎯 Creates prioritized issues** (bugs, missing tests, TODOs)
-3. **🤖 Auto-assigns AI agents** via @copilot mention
-4. **💻 Agents create PRs** with actual implementations
-5. **✅ Auto-reviewer validates** safety and quality
-6. **🔀 Safe changes auto-merge** (docs, tests, low-risk fixes)
-7. **🏥 Self-heals** when workflows break
+```console
+$ python .github/scripts/demo.py
 
-**Result:** Your repository improves itself while you focus on features! 🚀
+Merge gate — policy: .github/agent-policy.yml
 
----
+scenario                                     author  verdict          auto-merge
+────────────────────────────────────────────────────────────────────────────────────
+agent fixes a typo in the docs               agent   APPROVE          yes
+                                             └─ —
+agent edits a CI workflow                    agent   COMMENT          no
+                                             └─ `.github/workflows/ci.yml` is a protected path
+agent adds a credential to a README          agent   REQUEST_CHANGES  no
+                                             └─ `README.md`: looks like a hardcoded credential
+agent PR whose body targets the next agent   agent   REQUEST_CHANGES  no
+                                             └─ [high] PR body: instructs a reader to ignore previous instructions
+agent hides instructions in an HTML comment  agent   COMMENT          no
+                                             └─ [high] README.md: HTML comment contains instructions addressed to a reader
+agent adds docker-compose.yml                agent   COMMENT          no
+                                             └─ `docker-compose.yml` is a protected path
+agent doc fix, but CI is red                 agent   COMMENT          no
+                                             └─ CI is not green (failing: unit-tests)
+agent submits a binary file                  agent   COMMENT          no
+                                             └─ `docs/arch.md`: diff unavailable, so it cannot be inspected
+agent rewrites 400 lines of docs             agent   COMMENT          no
+                                             └─ 400 lines changed (limit 150)
+human fixes a typo in the docs               human   COMMENT          no
+                                             └─ `docs/install.md` is outside the auto-merge allowlist
 
-## ⚡ One-Line Install
+All 10 scenarios behaved as documented.
+```
+
+Add `--verbose` to see the full review body the gate posts. Change
+`.github/agent-policy.yml`, re-run, and watch the verdicts move — that is the
+whole feedback loop for tuning policy.
+
+These same ten scenarios run in CI as tests, so this output cannot drift from
+what the code does.
+
+## What makes it different
+
+**It reads the diff, not the filename.** A `README.md` containing a live API
+key is not a safe documentation change. Extension-based rules cannot see that;
+this catches it.
+
+**It knows who wrote the PR.** Bot accounts, known agent branch prefixes, and
+agent title markers select a stricter profile. Unknown authorship is treated as
+agent-authored — being wrong in the strict direction costs one human review;
+being wrong the other way merges unread machine output.
+
+**It scans for prompt injection.** Your agents read issue bodies, PR
+descriptions, and code comments. Anything they read, an attacker can write —
+this is a live attack class with assigned CVEs across multiple vendors, and in
+the disclosed `claude-code-action` compromise an *issue title alone* carried the
+payload. The gate flags text shaped like an attempt to give your agent orders:
+instruction overrides, credential-read paths like `/proc/self/environ`,
+exfiltration to a URL, guardrail-disabling flags, zero-width characters, bidi
+overrides, and instructions concealed in HTML comments.
+
+**It fails closed.** Unreadable diff, unknown CI state, unparseable policy, an
+exception anywhere — every one of them blocks the merge. There is no code path
+where a failure results in a merge.
+
+**Policy is a file, not a fork.** Everything lives in
+`.github/agent-policy.yml`. Tuning the gate is a reviewable pull request, not a
+patch to someone else's Python.
+
+## Install
 
 ```bash
-curl -sL https://raw.githubusercontent.com/grloper/autonomous-loop-template/main/scripts/install-autonomous-loop.sh | bash
+git clone https://github.com/grloper/autonomous-pipeline-agents /tmp/gate
+cp -r /tmp/gate/.github/scripts .github/
+cp    /tmp/gate/.github/workflows/gate.yml .github/workflows/
+cp    /tmp/gate/.github/agent-policy.yml   .github/
 ```
 
-That's it! Your repo is now autonomous. 🎉
+Then edit `protected_paths` in `.github/agent-policy.yml` to name your auth,
+payments, migration, and infrastructure directories, and run the demo to
+confirm the policy behaves the way you meant.
 
----
+## Policy
 
-## 🎯 What Gets Installed
+```yaml
+version: 1
 
+provenance:
+  actors: [copilot-swe-agent[bot], claude[bot], devin-ai-integration[bot]]
+  branch_prefixes: [copilot/, claude/, agent/]
+
+protected_paths:          # always a human, whoever wrote it
+  - ".github/**"
+  - "**/*auth*"
+  - "**/migrations/**"
+  - "**/package-lock.json"
+
+profiles:
+  agent:                  # machine-authored
+    auto_merge_paths: ["**/*.md", "docs/**"]
+    max_files: 5
+    max_lines: 150
+    require_ci: true
+  human:                  # people merge their own work
+    auto_merge_paths: []
+
+diff_rules:
+  - id: hardcoded-secret
+    pattern: '(?i)\b(api[_-]?key|secret|token)\b\s*[=:]\s*[''"][^''"]{8,}'
+    severity: block       # block -> REQUEST_CHANGES, warn -> blocks auto-merge only
+    message: looks like a hardcoded credential
 ```
-your-project/
-├── .github/
-│   ├── workflows/
-│   │   ├── orchestrator.yml          # 🎯 The brain - analyzes & prioritizes
-│   │   ├── copilot-automation.yml    # 🤖 Auto-assigns AI agents
-│   │   ├── workflow-doctor.yml       # 🏥 Self-heals failures
-│   │   └── manual-pr-review.yml      # ⚙️  Manual controls (backup)
-│   │
-│   ├── scripts/
-│   │   ├── orchestrator.py           # Analysis engine (274 lines)
-│   │   ├── auto_reviewer.py          # PR safety validator (200+ lines)
-│   │   └── workflow_doctor.py        # Diagnostics engine (150+ lines)
-│   │
-│   └── copilot-instructions.md       # 📖 AI context (customize this!)
-│
-└── requirements.txt                   # Python dependencies
-```
 
-**Total:** ~700 lines of battle-tested automation code
+Omitted keys keep their defaults. A policy file that cannot be parsed falls back
+to the strict built-ins **and** blocks auto-merge until it is fixed.
 
----
+## Auto-merge requires all of these
 
-## 🚀 Quick Start (3 Steps)
+| Condition | Why |
+|---|---|
+| every path in the profile's `auto_merge_paths` | documentation only, by default |
+| no path in `protected_paths` | CI, deps, auth, infra always need a human |
+| within `max_files` and `max_lines` | a wide change is a design change |
+| no `block` rule matches the diff | content check, not extension check |
+| no critical injection signal | in the PR text or the added lines |
+| CI green | pending, absent, and unreadable all count as not green |
+| policy loaded cleanly | a policy you can't read isn't enforceable |
 
-### 1️⃣ Install
+## Also included
+
+Two smaller tools that share the same repository:
+
+- **`scan.py`** — finds `TODO`/`FIXME`/`HACK`/`XXX`/`BUG` comments, scores them
+  `impact × urgency ÷ risk`, and files deduplicated issues. Markers only count
+  inside comments, so config tables and string literals don't trip it.
+- **`doctor.py`** — downloads a failed run's logs, matches them against known
+  failure signatures, and files one issue per (workflow, failure type). It
+  diagnoses only; it never edits workflow files.
+
+## Security
+
+This workflow holds write access to your repository, so:
+
+- **The gate never runs code from the PR it reviews.** It checks out `base.sha`.
+  With a head checkout, a pull request could rewrite `gate.py` and have its own
+  modified gate approve it.
+- **Author-controlled text reaches scripts via `env:`**, never `${{ }}`
+  interpolation inside a script body, which would let a crafted PR title execute
+  as JavaScript.
+- **`contents: write` exists only on the merge job.**
+- **Pin actions to full commit SHAs** if you want to go further; tag rewrites
+  have been used to compromise Actions consumers at scale.
+
+`scripts/verify-setup.sh` asserts each of these and fails the build if one
+regresses.
+
+## Limits
+
+Worth knowing before you rely on it:
+
+- `diff_rules` is a regex list. It catches careless changes and known-bad
+  idioms; it will not stop a determined author.
+- Injection detection is heuristic. It is tuned for precision over recall — a
+  scanner that fires on every README gets muted, and a muted scanner detects
+  nothing. It will miss novel phrasings.
+- The auto-merge allowlist is documentation-only by default. Widening it shifts
+  risk onto the pattern list, which is the weaker of the two controls.
+- **Nothing here measures whether a merged change was correct.** Revert rate and
+  post-merge CI breakage are the signals that would close that loop, and they
+  are not implemented.
+
+## Development
 
 ```bash
-# From your project root
-curl -sL https://raw.githubusercontent.com/grloper/autonomous-loop-template/main/scripts/install-autonomous-loop.sh | bash
+pip install -r .github/scripts/requirements.txt pyyaml
+python -m unittest discover -s tests -v   # 79 tests
+python .github/scripts/demo.py            # 10 scenarios
+bash scripts/verify-setup.sh              # 31 checks
 ```
 
-### 2️⃣ Customize
+## License
 
-```bash
-# Edit project context for AI
-nano .github/copilot-instructions.md
-
-# Define critical files (won't auto-merge)
-nano .github/scripts/auto_reviewer.py
-```
-
-### 3️⃣ Verify Setup (Optional but Recommended)
-
-```bash
-# Check that everything is installed correctly
-curl -sL https://raw.githubusercontent.com/grloper/autonomous-loop-template/main/scripts/verify-setup.sh | bash
-```
-
-This will check for missing files, configuration issues, and give you a health report.
-
-### 4️⃣ Activate
-
-```bash
-# Commit the automation
-git add .github/
-git commit -m "feat: Add autonomous development loop 🔄"
-git push
-
-# Trigger first run
-gh workflow run orchestrator.yml
-```
-
-**Done!** Your repo now manages itself. Check back in 30 minutes. 🎉
-
----
-
-## 🔄 How It Works
-
-```
-┌──────────────┐
-│ Orchestrator │ ← Runs weekly (or on-demand via "THE BUTTON")
-│  (Analyzer)  │   Scans: TODOs, FIXMEs, missing tests, security
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│ Prioritizer  │   Scores by: Impact × Urgency ÷ Risk
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│Issue Creator │   Creates GitHub issues with:
-│              │   • Detailed requirements
-└──────┬───────┘   • Success criteria
-       ↓            • Priority labels
-┌──────────────┐
-│Auto-Assigner │   Tags @copilot immediately
-└──────┬───────┘
-       ↓
-┌──────────────┐
-│Coding Agent  │   Analyzes + implements + creates PR
-└──────┬───────┘   [WIP] Draft with checklist
-       ↓
-┌──────────────┐
-│Auto-Reviewer │   6-tier safety decision:
-│  (Validator) │   • Docs → AUTO-MERGE (30s delay)
-└──────┬───────┘   • Code → APPROVE (you merge)
-       ↓            • Risky → COMMENT (full review)
-┌──────────────┐
-│  Integrator  │   Merges + closes issues
-└──────┬───────┘
-       │
-       └─────────┐
-                 ↓
-       ┌─────────────────┐
-       │Workflow Doctor  │ ← Self-heals failures
-       │ (Self-Healer)   │   Creates diagnostic issues
-       └─────────┬───────┘   Triggers fix loop
-                 │
-                 └──────→ Back to Orchestrator
-                          ♻️  INFINITE LOOP
-```
-
----
-
-## 🎛️ Automation Levels
-
-Choose how much control you want to keep:
-
-| Level | Auto-Merge | Auto-Approve | Who Merges | Best For |
-|-------|:----------:|:------------:|------------|----------|
-| **Observer** | ❌ | ❌ | You | Learning, high-risk projects |
-| **Assistant** | Docs only | ✅ | You (1-click) | **Most teams** ⭐ |
-| **Autonomous** | ✅ | ✅ | System | Mature teams, high trust |
-
-Configure in `.github/workflows/copilot-automation.yml`
-
----
-
-## 📊 ROI Calculator
-
-**Time Investment:**
-- Initial setup: 30 min
-- Customization: 1-2 hrs
-- Learning: 2-3 hrs
-- **Total:** ~4 hours
-
-**Time Saved (per week):**
-- Issue triage: 2 hrs → 0 hrs
-- Code review: 3 hrs → 30 min
-- Bug hunting: 1 hr → 20 min
-- Workflow debugging: 1 hr → 0 hrs
-- **Total:** ~6.5 hrs/week
-
-**Payback:** <1 week
-
-**Yearly benefit:** 6.5 hrs/wk × 50 wks = **325 hours** (~$32,500 at $100/hr)
-
----
-
-## 🔧 Use Cases
-
-### 🌐 Web App (Next.js, React, Vue)
-```bash
-# Scans for:
-- Unprotected API routes
-- Missing input validation  
-- Hardcoded secrets
-- Unused dependencies
-- Missing tests
-
-# Auto-fixes:
-- Adds Zod validation
-- Implements rate limiting
-- Extracts to env vars
-- Removes dead code
-- Creates test suites
-```
-
-### 🐍 Python (Django, FastAPI, Data Science)
-```bash
-# Scans for:
-- SQL injection risks
-- Missing type hints
-- No error handling
-- Brittle transforms
-- Poor test coverage
-
-# Auto-fixes:
-- Parameterizes queries
-- Adds type annotations
-- Implements try/except
-- Adds data validation
-- Creates pytest suites
-```
-
-### 📱 Mobile (React Native, Flutter)
-```bash
-# Scans for:
-- Unoptimized images
-- Missing offline mode
-- Memory leaks
-- Accessibility gaps
-- Hardcoded strings
-
-# Auto-fixes:
-- Compresses assets
-- Adds caching layer
-- Implements cleanup
-- Adds a11y labels
-- Extracts to i18n
-```
-
----
-
-## 🎓 Real-World Examples
-
-**Before Autonomous Loop:**
-- 😫 "What should I work on next?" → 30 min deciding
-- 📝 Manual issue creation → 10 min/issue
-- 👀 PR review process → 2-4 hours
-- 🐛 Workflow failures → 1 hour debugging
-- **Total:** 8-10 hrs/week overhead
-
-**After Autonomous Loop:**
-- ✅ Work prioritized automatically → 0 min
-- ✅ Issues created while you sleep → 0 min
-- ✅ Safe PRs auto-merge → 0 min
-- ✅ Workflows self-heal → 0 min
-- 👤 You only review critical changes → 30 min
-- **Total:** 30 min/week → **7.5 hrs saved!**
-
----
-
-## 🛠️ Customization Guide
-
-### Define Your Critical Files
-
-Edit `.github/scripts/auto_reviewer.py`:
-
-```python
-CRITICAL_FILES = {
-    # Your authentication code
-    'src/auth/': ['authentication logic'],
-    
-    # Payment processing
-    'src/api/payments/': ['payment flow'],
-    
-    # Infrastructure
-    'terraform/': ['infrastructure as code'],
-    '.github/workflows/': ['CI/CD pipelines'],
-    
-    # Add yours...
-}
-```
-
-### Adjust Scan Patterns
-
-Edit `.github/scripts/orchestrator.py`:
-
-```python
-PRIORITY_PATTERNS = {
-    'security': [
-        r'TODO.*security',
-        r'FIXME.*auth',
-        r'XXX.*password',
-    ],
-    'your_domain': [
-        r'TODO.*your_keyword',
-        # Add your patterns
-    ],
-}
-```
-
-### Set Thresholds
-
-```python
-# auto_reviewer.py
-SAFETY_THRESHOLDS = {
-    'max_files_for_auto_merge': 3,    # Adjust for your team
-    'max_lines_changed': 100,          # More conservative = lower
-}
-```
-
----
-
-## 📚 Documentation
-
-- **[Complete Setup Guide](./AUTONOMOUS-LOOP-SETUP.md)** - 500+ lines, every detail
-- **[Quick Reference](./QUICKSTART.md)** - Cheat sheet, common commands
-- **[PR Review Flow](./.github/PR-REVIEW-FLOW.md)** - How auto-merge works
-
----
-
-## 🐛 Troubleshooting
-
-| Problem | Solution |
-|---------|----------|
-| **"Workflow not found"** | Wait 30 seconds after pushing `.github/workflows/`, then try again |
-| **Orchestrator doesn't create issues** | 1. Check if there are TODOs in code<br>2. Lower `MIN_PRIORITY_SCORE` in `orchestrator.py`<br>3. Run manually: `gh workflow run orchestrator.yml` |
-| **"PyGithub not found" error** | Workflows auto-install deps. If failing, check `requirements.txt` is present |
-| **Copilot doesn't create PRs** | 1. Verify GitHub Copilot access enabled<br>2. Check `@copilot` mention in issue comments<br>3. Ensure issue has proper labels |
-| **PRs not auto-merging** | 1. Check `CRITICAL_FILES` in `auto_reviewer.py`<br>2. Reduce `max_files_for_auto_merge` threshold<br>3. Verify PR passes all checks |
-| **Too many issues created** | 1. Use `focus_area` parameter when triggering<br>2. Raise `MIN_PRIORITY_SCORE` in orchestrator<br>3. Clean up TODOs/FIXMEs in code |
-| **"Permission denied" errors** | Verify repository has correct permissions in Settings → Actions → General → Workflow permissions (Read & Write) |
-| **Workflows show "action_required"** | Normal for draft PRs. Mark PR as "Ready for review" to trigger auto-review |
-| **Installer script fails** | 1. Check `git` and `gh` CLI installed<br>2. Ensure you're in git repository root<br>3. Run with `bash` not `sh` |
-
-### 🔍 **Common First-Time Issues**
-
-**"Nothing happens after install"**
-- Workflows don't run automatically until you trigger them or wait for schedule
-- Trigger manually: `gh workflow run orchestrator.yml`
-
-**"Auto-review approves everything"**
-- Update `CRITICAL_FILES` in `.github/scripts/auto_reviewer.py`
-- Add your security-critical paths
-
-**"System creates issues but no PRs"**
-- Check GitHub Copilot is enabled for your organization
-- Verify `@copilot` has access to your repository
-- Issues need time (~2-5 minutes) for Copilot to respond
-
-[Full troubleshooting guide →](./AUTONOMOUS-LOOP-SETUP.md#-troubleshooting)
-
----
-
-## 🤝 Contributing
-
-Contributions welcome! This template improves as more teams use it.
-
-**Ways to contribute:**
-- 🐛 Report bugs or edge cases
-- 💡 Suggest new scan patterns
-- 📖 Improve documentation
-- 🎨 Add examples for new frameworks
-- ⭐ Star the repo to help others find it
-
----
-
-## 📜 License
-
-MIT License - Use freely in any project (personal or commercial)
-
----
-
-## 🌟 Success Stories
-
-> "Reduced code review backlog from 40 PRs to 5 PRs in 2 weeks. The system handles all the boring stuff."  
-> — *Developer at Series A startup*
-
-> "Our test coverage went from 45% to 78% automatically. The orchestrator found gaps we didn't even know existed."  
-> — *Engineering Lead at healthcare company*
-
-> "Best part: I came back from vacation and the repo had fixed itself. 6 issues resolved, 0 fires to put out."  
-> — *Solo founder*
-
----
-
-## 🚀 Get Started
-
-```bash
-# 1. Install (5 seconds)
-curl -sL https://raw.githubusercontent.com/grloper/autonomous-loop-template/main/scripts/install-autonomous-loop.sh | bash
-
-# 2. Customize (5 minutes)
-nano .github/copilot-instructions.md
-
-# 3. Activate (10 seconds)
-git add .github/ && git commit -m "feat: Add autonomous loop 🔄" && git push
-
-# 4. Trigger (5 seconds)
-gh workflow run orchestrator.yml
-
-# 5. Check back in 30 minutes
-gh pr list  # PRs auto-created and reviewed!
-```
-
-**Your repo is now self-managing.** Go grab a coffee. ☕
-
----
-
-## 📞 Support
-
-- **Issues:** [GitHub Issues](https://github.com/grloper/autonomous-loop-template/issues)
-- **Discussions:** [GitHub Discussions](https://github.com/grloper/autonomous-loop-template/discussions)
-- **Documentation:** [Full Setup Guide](./AUTONOMOUS-LOOP-SETUP.md)
-
----
-
-<div align="center">
-
-**Made with ❤️ by developers who hate boring work**
-
-[⭐ Star this repo](https://github.com/grloper/autonomous-loop-template) · [🐛 Report Bug](https://github.com/grloper/autonomous-loop-template/issues) · [💡 Request Feature](https://github.com/grloper/autonomous-loop-template/issues)
-
-</div>
+MIT.

@@ -1,0 +1,120 @@
+name: "Merge gate"
+
+# SECURITY NOTES — read before editing.
+#
+# 1. This workflow decides whether a pull request may merge, so it must never
+#    execute code the pull request supplied. The checkout pins to `base.sha`
+#    (the trusted target branch). With a head checkout, a PR could rewrite
+#    gate.py and have its own modified gate approve it.
+#
+# 2. Author-controlled values (title, body, branch) reach scripts through
+#    `env:`, never `${{ }}` interpolation inside a script body — that would let
+#    a crafted PR title execute as JavaScript.
+#
+# 3. `contents: write` exists only on the merge job.
+#
+# 4. Actions are pinned by major-version tag. Full commit SHAs are stronger for
+#    a workflow with write access; tag rewrites have been used to compromise
+#    Actions consumers at scale.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: gate-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    name: "Evaluate against policy"
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      verdict: ${{ steps.gate.outputs.verdict }}
+      auto_merge: ${{ steps.gate.outputs.auto_merge }}
+      is_agent: ${{ steps.gate.outputs.is_agent }}
+
+    steps:
+      - name: Check out trusted base commit
+        uses: actions/checkout@v4
+        with:
+          # Never the PR head.
+          ref: ${{ github.event.pull_request.base.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r .github/scripts/requirements.txt
+
+      - name: Run the merge gate
+        id: gate
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/scripts/gate.py \
+            --repo "${{ github.repository }}" \
+            --pr-number "${{ github.event.pull_request.number }}"
+
+      - name: Post the review
+        uses: actions/github-script@v7
+        env:
+          VERDICT: ${{ steps.gate.outputs.verdict }}
+          BODY: ${{ steps.gate.outputs.body }}
+        with:
+          script: |
+            // Both values arrive via env, so nothing author-controlled is
+            // interpolated into this script's text.
+            const { VERDICT, BODY } = process.env;
+            await github.rest.pulls.createReview({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              event: VERDICT === 'APPROVE' ? 'APPROVE'
+                   : VERDICT === 'REQUEST_CHANGES' ? 'REQUEST_CHANGES'
+                   : 'COMMENT',
+              body: BODY,
+            });
+
+  merge:
+    name: "Merge"
+    needs: review
+    if: needs.review.outputs.auto_merge == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Merge the pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            try {
+              await github.rest.pulls.merge({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                pull_number: pr.number,
+                merge_method: 'squash',
+              });
+              core.info(`Merged PR #${pr.number}`);
+            } catch (error) {
+              core.warning(`Merge failed: ${error.message}`);
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: `The gate approved this, but the merge did not complete: ${error.message}\n\nIt needs a manual merge.`,
+              });
+            }

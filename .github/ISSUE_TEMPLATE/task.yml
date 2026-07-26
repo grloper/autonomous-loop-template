@@ -1,0 +1,62 @@
+name: Task
+description: Work to be picked up by a person or a coding agent
+labels: ["task"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Anything an agent might implement should be specific enough that you
+        could tell, without asking the author, whether it was done correctly.
+
+  - type: textarea
+    id: what
+    attributes:
+      label: What needs to change
+      description: The current behaviour and the intended behaviour.
+      placeholder: |
+        Currently: uploads over 10 MB fail with a generic 500.
+        Should: reject with 413 and a message naming the limit.
+    validations:
+      required: true
+
+  - type: textarea
+    id: where
+    attributes:
+      label: Where
+      description: Files, directories, or endpoints involved, if known.
+      placeholder: "src/api/upload.py, and the client-side handler in web/upload.ts"
+    validations:
+      required: false
+
+  - type: textarea
+    id: done
+    attributes:
+      label: Done when
+      description: Checkable conditions. Avoid "works properly".
+      value: |
+        - [ ]
+        - [ ] Existing tests still pass
+        - [ ] A test covers the new behaviour
+    validations:
+      required: true
+
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Out of scope
+      description: >
+        Anything nearby that should not be touched. Being explicit here prevents
+        an unrequested refactor arriving alongside the fix.
+    validations:
+      required: false
+
+  - type: dropdown
+    id: risk
+    attributes:
+      label: Risk
+      options:
+        - Low — isolated, easily reverted
+        - Medium — touches shared code
+        - High — auth, payments, migrations, or infrastructure
+    validations:
+      required: true

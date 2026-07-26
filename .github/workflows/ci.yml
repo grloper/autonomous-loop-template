@@ -1,0 +1,39 @@
+name: "CI"
+
+# The auto-reviewer refuses to merge when CI is absent or not green, so this
+# workflow is what makes auto-merge reachable at all.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: "Tests and checks"
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r .github/scripts/requirements.txt pyyaml
+
+      - name: Run tests
+        run: python -m unittest discover -s tests -v
+
+      - name: Verify setup and safety properties
+        run: bash scripts/verify-setup.sh
+
+      - name: Check shell scripts parse
+        run: for f in scripts/*.sh; do bash -n "$f"; done

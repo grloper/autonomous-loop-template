@@ -1,0 +1,63 @@
+name: "Repository scan"
+
+# NOTE ON SCHEDULED RUNS
+# GitHub automatically disables a `schedule:` trigger after 60 days without
+# repository activity, and does not notify you. If the orchestrator stops
+# running on a quiet repository, check the workflow's state on the Actions tab
+# before assuming the code is at fault — this is the single most common reason
+# an "autonomous" loop silently stops.
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Report findings without creating issues'
+        type: boolean
+        default: false
+      max_issues:
+        description: 'Maximum issues to create this run'
+        type: string
+        default: '5'
+
+  schedule:
+    - cron: '0 8 * * 1'  # Mondays, 08:00 UTC
+
+# The orchestrator reads the working tree and writes issues. It never pushes
+# commits, so it does not get `contents: write`.
+permissions:
+  contents: read
+  issues: write
+
+concurrency:
+  group: orchestrator
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    name: "Scan and file issues"
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install -r .github/scripts/requirements.txt
+
+      - name: Run the scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+        run: |
+          python .github/scripts/scan.py \
+            --max-issues "${{ inputs.max_issues || '5' }}" \
+            ${{ inputs.dry_run == true && '--dry-run' || '' }}

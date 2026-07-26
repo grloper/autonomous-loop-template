@@ -1,0 +1,141 @@
+# Merge-gate policy.
+#
+# This file is the whole configuration surface. Changing behaviour means
+# editing YAML in a reviewable pull request, not forking the tool.
+#
+# Anything you omit keeps its built-in default. If this file cannot be parsed,
+# the gate falls back to the strict defaults and blocks auto-merge until it is
+# fixed — a policy that cannot be read is not a policy that can be enforced.
+
+version: 1
+
+# How to tell an agent-authored pull request from a human one. Agent PRs get
+# the stricter profile, because nobody watched them being written.
+provenance:
+  actors:
+    - copilot-swe-agent[bot]
+    - copilot[bot]
+    - github-actions[bot]
+    - claude[bot]
+    - devin-ai-integration[bot]
+    - cursoragent
+    - sweep-ai[bot]
+    - codegen-sh[bot]
+  branch_prefixes: [copilot/, claude/, agent/, devin/, sweep/, codegen/]
+  title_markers: ["[agent]", "🤖"]
+
+# Always require a human, whoever wrote the change. Add your own paths here —
+# this list is the single most valuable thing to customise.
+protected_paths:
+  - ".github/**"                  # CI runs with repository credentials
+  - "**/*auth*"
+  - "**/*secret*"
+  - "**/*credential*"
+  - "**/security/**"
+  - "**/.env*"
+  - "**/migrations/**"            # schema changes are hard to revert
+  - "**/Dockerfile*"
+  - "**/docker-compose*.y*ml"
+  - "**/action.y*ml"
+  - "**/*.tf"
+  - "**/*.tfvars"
+  - "**/k8s/**"
+  - "**/helm/**"
+  - "**/charts/**"
+  - "**/Makefile"
+  - "**/*.sh"
+  # Dependency manifests: a lockfile edit is a supply-chain change.
+  - "**/requirements*.txt"
+  - "**/package.json"
+  - "**/package-lock.json"
+  - "**/pnpm-lock.yaml"
+  - "**/yarn.lock"
+  - "**/go.mod"
+  - "**/go.sum"
+  - "**/Cargo.toml"
+  - "**/Cargo.lock"
+  - "**/pyproject.toml"
+  - "**/Gemfile*"
+
+profiles:
+  # Machine-authored pull requests.
+  agent:
+    auto_merge_paths: ["**/*.md", "**/*.markdown", "**/*.txt", "**/*.rst", "docs/**"]
+    max_files: 5
+    max_lines: 150
+    require_ci: true
+
+  # Human-authored pull requests. Auto-merge is off: people merge their own
+  # work, and the gate exists to review what a machine wrote. Set
+  # `auto_merge_paths` here if you want it for humans too.
+  human:
+    auto_merge_paths: []
+    max_files: 0
+    max_lines: 0
+    require_ci: true
+
+# Matched against added and removed lines of the diff.
+#   block — REQUEST_CHANGES
+#   warn  — reported, blocks auto-merge, does not request changes
+diff_rules:
+  - id: eval
+    pattern: '\beval\s*\('
+    severity: block
+    message: uses eval()
+
+  - id: shell-true
+    pattern: 'subprocess\.\w+\([^)]*shell\s*=\s*True'
+    severity: block
+    message: shell=True subprocess call
+
+  - id: curl-pipe-sh
+    pattern: 'curl[^\n|]*\|\s*(ba)?sh'
+    severity: block
+    message: pipes a download into a shell
+
+  - id: hardcoded-secret
+    pattern: '(?i)\b(api[_-]?key|secret|password|token|private[_-]?key)\b\s*[=:]\s*[''"][^''"]{8,}'
+    severity: block
+    message: looks like a hardcoded credential
+
+  - id: tls-off
+    pattern: '(?i)(verify\s*=\s*False|rejectUnauthorized\s*:\s*false)'
+    severity: block
+    message: disables TLS verification
+
+  - id: disable-control
+    pattern: '(?i)\b(disable|bypass|skip|remove)\w*[_\s-]*(auth|security|validation|verification|check)'
+    severity: block
+    message: disables a security control
+
+  - id: write-all
+    pattern: '(?i)permissions:\s*write-all'
+    severity: block
+    message: grants write-all permissions
+
+  - id: id-token
+    pattern: '(?i)id-token:\s*write'
+    severity: block
+    message: >-
+      requests an OIDC token; combined with contents: write this is the
+      documented credential-exfiltration path
+
+  - id: drop-table
+    pattern: '(?i)\bDROP\s+(TABLE|DATABASE)\b'
+    severity: block
+    message: destructive SQL
+
+  - id: rm-rf-root
+    pattern: '(?i)\brm\s+-rf\s+/'
+    severity: block
+    message: recursive delete from root
+
+  - id: debug-flag
+    pattern: '(?i)\bDEBUG\s*=\s*True'
+    severity: warn
+    message: enables debug mode
+
+  - id: todo-added
+    pattern: '^\+.*\b(TODO|FIXME)\b'
+    severity: warn
+    message: adds a TODO/FIXME
